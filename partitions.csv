@@ -1,0 +1,5 @@
+# Name,   Type, SubType, Offset,  Size, Flags
+phy,data,phy,0x9000,0x1000,
+factory,app,factory,0x10000,0x400000,
+meshcore_data,data,littlefs,0x410000,0x100000,
+logs,data,undefined,0x510000,0x2F0000,
