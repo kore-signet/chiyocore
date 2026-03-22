@@ -78,7 +78,9 @@ pub async fn tcp_companion(
     let mut write_scratch: SmallVec<[u8; 256]> = SmallVec::new();
 
     let mut tcp = TcpSocket::new(stack, &mut tcp_rx_buf, &mut tcp_tx_buf);
-    tcp.set_keep_alive(Some(Duration::from_secs(1)));
+    tcp.set_keep_alive(Some(Duration::from_millis(1000)));
+    tcp.set_timeout(Some(Duration::from_secs(2)));
+    tcp.set_nagle_enabled(false);
 
     loop {
         log::info!("connecting as companion...");

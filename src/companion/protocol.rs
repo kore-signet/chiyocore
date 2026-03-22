@@ -658,12 +658,12 @@ pub enum ResponseCodes {
     LogData = 0x88,
     LoginSuccess = 0x85,
     SignStart = 0x13,
-    Signature = 0x20,
+    Signature = 0x14,
     ExportPrivateKey = 0xe,
     CustomVars = 0x15,
 }
 
-#[derive(FromRepr)]
+#[derive(FromRepr, Debug)]
 #[repr(u8)]
 pub enum HostCommandType {
     AppStart = 1,

@@ -269,7 +269,7 @@ impl<B: BotLayer + Send> CompanionHandler for SimpleCompanion<B> {
     ) -> (u32, impl Iterator<Item = Contact> + 's) {
         let len = self.contacts.cache.len();
         let mut contacts = Vec::with_capacity(len);
-        for cached_contact in &self.contacts.cache {
+        for cached_contact in self.contacts.cache.values() {
             contacts.push(
                 self.contacts
                     .get_full(cached_contact.key())

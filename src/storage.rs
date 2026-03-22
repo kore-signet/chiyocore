@@ -1,11 +1,11 @@
 use alloc::{
     string::{String, ToString},
     sync::Arc,
-    vec::Vec,
 };
 use base64::{Engine, prelude::BASE64_URL_SAFE};
 use embedded_storage::nor_flash::ReadNorFlash;
 use esp_storage::FlashStorage;
+use litemap::LiteMap;
 use littlefs2::{consts::U256, fs::Filesystem, object_safe::DynFilesystem, path::Path};
 use ouroboros::self_referencing;
 use serde::{Serialize, de::DeserializeOwned};
@@ -260,7 +260,7 @@ pub trait CachedVersion<K: FileDbKey> {
 pub struct CachedFileDb<const SIZE: usize, T: Cacheable> {
     prefix: &'static littlefs2::path::Path,
     fs: Arc<EspMutex<ActiveFilesystem<SIZE>>>,
-    pub cache: Vec<T::Cached>,
+    pub cache: LiteMap<T::Key, T::Cached>,
 }
 
 impl<T: Cacheable, const SIZE: usize> CachedFileDb<SIZE, T> {
@@ -276,7 +276,7 @@ impl<T: Cacheable, const SIZE: usize> CachedFileDb<SIZE, T> {
         let cache = fs.with_fs_mut(|fs| {
             fs.create_dir_all(prefix);
             fs.read_dir_and_then(prefix, |dir| {
-                let mut cache = Vec::new();
+                let mut cache = LiteMap::new();
                 let mut scratch = heapless::Vec::<u8, 512>::new();
 
                 for entry in dir {
@@ -294,10 +294,12 @@ impl<T: Cacheable, const SIZE: usize> CachedFileDb<SIZE, T> {
                         })
                         .unwrap();
 
-                    cache.push(data.as_cached());
+                    cache.insert(*data.key(), data.as_cached());
+                    // cache.push(data.as_cached());
                 }
-                cache.sort_unstable_by_key(|v| *v.key());
-                cache.shrink_to_fit();
+
+                // cache.sort_unstable_by_key(|v| *v.key());
+                // cache.shrink_to_fit();
                 Ok(cache)
             })
             .unwrap()
@@ -321,11 +323,16 @@ impl<T: Cacheable, const SIZE: usize> CachedFileDb<SIZE, T> {
     }
 
     pub fn get_cached(&self, prefix: &[u8]) -> Option<&T::Cached> {
-        self.cache.iter().find(|v| v.key().prefix_matches(prefix))
+        // todo: bin search
+        self.cache
+            .iter()
+            .find(|v| v.1.key().prefix_matches(prefix))
+            .map(|v| v.1)
+        // self.cache.iter().find(|v| v.key().prefix_matches(prefix))
     }
 
     pub fn contains(&self, prefix: &[u8]) -> bool {
-        self.cache.iter().any(|v| v.key().prefix_matches(prefix))
+        self.cache.iter().any(|(k, _)| k.prefix_matches(prefix))
     }
 
     pub async fn get_full(&self, key: &T::Key) -> FirmwareResult<Option<T>> {
@@ -348,19 +355,24 @@ impl<T: Cacheable, const SIZE: usize> CachedFileDb<SIZE, T> {
             .await
             .with_fs_mut(|fs| fs.write(&path, &entry_data))?;
 
-        self.cache.push(entry.as_cached());
-        self.cache.sort_unstable_by_key(|v| *v.key());
-        self.cache.shrink_to_fit();
+        // if let Some(cache_idx) = self.cache.iter().position(|v| v.key() == entry.key()) {
+        //     // self.cache[cache_idx] = entry.as_cached();
+        // } else {
+        //     self.cache.push(entry.as_cached());
+        //     self.cache.sort_unstable_by_key(|v| *v.key());
+        // }
+        // self.cache.shrink_to_fit();
+        self.cache.insert(*entry.key(), entry.as_cached());
         Ok(())
     }
 
     pub async fn delete(&mut self, key: &T::Key) -> FirmwareResult<()> {
-        let Some(pos) = self.cache.iter().position(|v| v.key() == key) else {
-            return Ok(());
-        };
+        // let Some(pos) = self.cache.iter().position(|v| v.key() == key) else {
+        //     return Ok(());
+        // };
 
-        self.cache.remove(pos);
-        self.cache.shrink_to_fit();
+        self.cache.remove(key);
+        // self.cache.shrink_to_fit();
 
         let path = self.path(key);
         self.fs.lock().await.with_fs_mut(|fs| fs.remove(&path))?;
@@ -369,7 +381,7 @@ impl<T: Cacheable, const SIZE: usize> CachedFileDb<SIZE, T> {
     }
 
     pub fn cache_size(&self) -> usize {
-        self.cache.iter().map(|v| v.size()).sum()
+        self.cache.iter().map(|v| v.1.size()).sum()
     }
 }
 

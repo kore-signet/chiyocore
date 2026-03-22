@@ -1608,7 +1608,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "meshcore"
 version = "0.1.0"
-source = "git+https://github.com/kore-signet/meshcore.git#abc437cd34a99fa90d1c59b577f7d5e9965e45ef"
+source = "git+https://github.com/kore-signet/meshcore.git#669c1660dce6549ac63698702d3f8affd773c914"
 dependencies = [
  "aes",
  "arrayref",
@@ -1622,6 +1622,7 @@ dependencies = [
  "hex",
  "hmac-sha256",
  "modular-bitfield",
+ "once_cell",
  "serde",
  "serde_arrays",
  "sha2",
@@ -1707,6 +1708,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ff76201f031d8863c38aa7f905eca4f53abbfa15f609db4277d44cd8938f33fe"
 dependencies = [
  "memchr",
+]
+
+[[package]]
+name = "once_cell"
+version = "1.21.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
+dependencies = [
+ "portable-atomic",
 ]
 
 [[package]]

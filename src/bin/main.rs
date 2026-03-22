@@ -14,6 +14,10 @@ use alloc::sync::Arc;
 use embassy_executor::Spawner;
 use embassy_time::Duration;
 // use embedded_storage::ReadStorage;
+use chiyocore::companion::handler::simple_companion::SimpleCompanion;
+use chiyocore::companion::handler::storage::{Channel, CompanionConfig};
+use chiyocore::companion::tcp::{TCP_COMPANION_CHANNEL, TcpCompanionSink};
+use chiyocore::ping_bot::PingBot;
 use esp_backtrace as _;
 use esp_bootloader_esp_idf::partitions::{DataPartitionSubType, PartitionType};
 use esp_hal::clock::CpuClock;
@@ -26,10 +30,6 @@ use esp_radio::wifi::ControllerConfig;
 use esp_radio::wifi::sta::StationConfig;
 use esp_sync::NonReentrantMutex;
 use log::info;
-use chiyocore::companion::handler::simple_companion::SimpleCompanion;
-use chiyocore::companion::handler::storage::{Channel, CompanionConfig};
-use chiyocore::companion::tcp::{TCP_COMPANION_CHANNEL, TcpCompanionSink};
-use chiyocore::ping_bot::PingBot;
 // use chiyocore::handler::{BasicHandlerManager, ContactManager, HandlerStorage};
 use chiyocore::storage::{ActiveFilesystem, FsPartition, SimpleFileDb};
 use chiyocore::{EspMutex, companion};
@@ -48,13 +48,17 @@ macro_rules! mk_static {
 #[embassy_executor::task]
 async fn heap_log(handler: Arc<EspMutex<SimpleCompanion<PingBot>>>) {
     loop {
-        embassy_time::Timer::after_secs(5).await;
+        embassy_time::Timer::after_secs(30).await;
         let stats = esp_alloc::HEAP.stats();
         let handler = handler.lock().await;
         let pct = (stats.current_usage as f32 / stats.size as f32) * 100.0;
         log::info!("heap: {}/{} ({pct:.2})", stats.current_usage, stats.size);
         log::info!("scratch: {}", handler.scratch.allocated_bytes());
-        log::info!("contacts cache: {}", handler.contacts.cache_size());
+        log::info!(
+            "contacts cache: {} ({} contacts)",
+            handler.contacts.cache_size(),
+            handler.contacts.cache.len()
+        );
         log::info!("channel cache: {}", handler.channels.db.cache_size());
         // log::info!("message log: {}", )
         // log::info!("")
@@ -189,7 +193,7 @@ async fn main(spawner: Spawner) -> ! {
 
     let handler = Arc::new(EspMutex::new(handler));
 
-    // spawner.spawn(heap_log(Arc::clone(&handler))).unwrap();
+    spawner.spawn(heap_log(Arc::clone(&handler))).unwrap();
 
     spawner
         .spawn(companion::tcp::tcp_companion(

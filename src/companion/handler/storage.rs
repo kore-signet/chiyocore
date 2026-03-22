@@ -230,11 +230,11 @@ impl ChannelManager {
 
         let by_name = LiteMap::from_iter(
             db.cache
-                .iter()
+                .values()
                 .map(|channel| (channel.name.clone(), channel.idx)),
         );
         let by_hash =
-            LiteMap::from_iter(db.cache.iter().map(|channel| (channel.hash, channel.idx)));
+            LiteMap::from_iter(db.cache.values().map(|channel| (channel.hash, channel.idx)));
 
         ChannelManager {
             by_hash,
