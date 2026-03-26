@@ -1,14 +1,12 @@
 use core::net::SocketAddr;
 
 use embassy_net::{
-    Runner,
     dns::{self},
     udp::{PacketMetadata, UdpSocket},
 };
 use embassy_time::{Duration, Timer};
 use esp_hal::rtc_cntl::Rtc;
 use esp_println::println;
-use esp_radio::wifi::{Interface, WifiController};
 // use esp_radio::wifi::{ClientConfig, ScanConfig, WifiController, WifiDevice, WifiEvent};
 use log::info;
 use sntpc::{NtpContext, NtpTimestampGenerator, get_time};
@@ -37,35 +35,6 @@ impl NtpTimestampGenerator for Timestamp<'_> {
     fn timestamp_subsec_micros(&self) -> u32 {
         (self.current_time_us % 1_000_000) as u32
     }
-}
-
-#[embassy_executor::task]
-pub async fn connection(mut controller: WifiController<'static>) {
-    println!("start connection task");
-
-    loop {
-        println!("About to connect...");
-
-        match controller.connect_async().await {
-            Ok(info) => {
-                println!("Wifi connected to {:?}", info);
-
-                // wait until we're no longer connected
-                let info = controller.wait_for_disconnect_async().await.ok();
-                println!("Disconnected: {:?}", info);
-            }
-            Err(e) => {
-                println!("Failed to connect to wifi: {e:?}");
-            }
-        }
-
-        Timer::after(Duration::from_millis(5000)).await
-    }
-}
-
-#[embassy_executor::task]
-pub async fn net_task(mut runner: Runner<'static, Interface<'static>>) {
-    runner.run().await
 }
 
 pub async fn ntp(stack: embassy_net::Stack<'static>, rtc: &Rtc<'_>) {

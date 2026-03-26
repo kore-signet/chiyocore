@@ -9,60 +9,62 @@
 
 extern crate alloc;
 
-use alloc::string::String;
 use alloc::sync::Arc;
-use embassy_executor::Spawner;
-use embassy_time::Duration;
-// use embedded_storage::ReadStorage;
-use chiyocore::companion::handler::simple_companion::SimpleCompanion;
-use chiyocore::companion::handler::storage::{Channel, CompanionConfig};
-use chiyocore::companion::tcp::{TCP_COMPANION_CHANNEL, TcpCompanionSink};
+use chiyocore::companion_protocol::tcp::TcpCompanionSink;
+use chiyocore::companionv2::Companion;
+use chiyocore::lora::LoraTaskChannel;
 use chiyocore::ping_bot::PingBot;
+use chiyocore::simple_mesh::SimpleMesh;
+use chiyocore::simple_mesh::storage::MeshStorage;
+use chiyocore::simple_mesh::storage::channel::Channel;
+use embassy_executor::Spawner;
+
+use embassy_sync::rwlock::RwLock;
 use esp_backtrace as _;
 use esp_bootloader_esp_idf::partitions::{DataPartitionSubType, PartitionType};
 use esp_hal::clock::CpuClock;
-use esp_hal::peripherals::WIFI;
-use esp_hal::rng::TrngSource;
-use esp_hal::rtc_cntl::Rtc;
+use esp_hal::rng::{Trng, TrngSource};
+use esp_hal::system::Stack;
 use esp_hal::timer::timg::TimerGroup;
-use esp_println::println;
-use esp_radio::wifi::ControllerConfig;
-use esp_radio::wifi::sta::StationConfig;
+use esp_rtos::embassy::Executor;
 use esp_sync::NonReentrantMutex;
 use log::info;
 // use chiyocore::handler::{BasicHandlerManager, ContactManager, HandlerStorage};
 use chiyocore::storage::{ActiveFilesystem, FsPartition, SimpleFileDb};
-use chiyocore::{EspMutex, companion};
+use chiyocore::{DataWithSnr, EspMutex};
+use meshcore::crypto::ChannelKeys;
+use meshcore::identity::LocalIdentity;
+use static_cell::StaticCell;
+use thingbuf::recycling::DefaultRecycle;
 
 esp_bootloader_esp_idf::esp_app_desc!();
 
-macro_rules! mk_static {
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write($val);
-        x
-    }};
-}
+// #[embassy_executor::task]
+// async fn heap_log(handler: Arc<EspMutex<SimpleCompanion<PingBot>>>) {
+//     loop {
+//         embassy_time::Timer::after_secs(30).await;
+//         let stats = esp_alloc::HEAP.stats();
+//         let handler = handler.lock().await;
+//         let pct = (stats.current_usage as f32 / stats.size as f32) * 100.0;
+//         log::info!("heap: {}/{} ({pct:.2})", stats.current_usage, stats.size);
+//         log::info!("scratch: {}", handler.scratch.allocated_bytes());
+//         log::info!(
+//             "contacts cache: {} ({} contacts)",
+//             handler.storage.contacts.cache_size(),
+//             handler.storage.contacts.cache.len()
+//         );
+//         log::info!("channel cache: {}", handler.storage.channels.cache_size());
+//     }
+// }
 
 #[embassy_executor::task]
-async fn heap_log(handler: Arc<EspMutex<SimpleCompanion<PingBot>>>) {
-    loop {
-        embassy_time::Timer::after_secs(30).await;
-        let stats = esp_alloc::HEAP.stats();
-        let handler = handler.lock().await;
-        let pct = (stats.current_usage as f32 / stats.size as f32) * 100.0;
-        log::info!("heap: {}/{} ({pct:.2})", stats.current_usage, stats.size);
-        log::info!("scratch: {}", handler.scratch.allocated_bytes());
-        log::info!(
-            "contacts cache: {} ({} contacts)",
-            handler.contacts.cache_size(),
-            handler.contacts.cache.len()
-        );
-        log::info!("channel cache: {}", handler.channels.db.cache_size());
-        // log::info!("message log: {}", )
-        // log::info!("")
-    }
+async fn run_handler(
+    lora_channel: LoraTaskChannel,
+    rx: thingbuf::mpsc::StaticReceiver<DataWithSnr, DefaultRecycle>,
+    handler: Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
+    layer: (Arc<EspMutex<Companion>>, Arc<EspMutex<PingBot>>),
+) {
+    lora_channel.run_handler(rx, handler, layer).await;
 }
 
 #[allow(
@@ -74,22 +76,19 @@ async fn main(spawner: Spawner) -> ! {
     // generator version: 1.2.0
 
     esp_println::logger::init_logger_from_env();
+    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 73744);
+    esp_alloc::heap_allocator!(size: 1024 * 32);
 
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
-
-    esp_alloc::heap_allocator!(#[esp_hal::ram(reclaimed)] size: 73744);
 
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_int =
         esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
     esp_rtos::start(timg0.timer0, sw_int.software_interrupt0);
+    let rtc = Arc::new(esp_hal::rtc_cntl::Rtc::new(peripherals.LPWR));
 
-    let rtc = esp_hal::rtc_cntl::Rtc::new(peripherals.LPWR);
-    rtc.set_current_time_us(1772833902705344);
     info!("Embassy initialized!");
-
-    // map.store_item(data_buffer, key, item)
 
     let mut sha = esp_hal::sha::ShaBackend::new(peripherals.SHA);
     let _sha_backend = sha.start();
@@ -99,27 +98,20 @@ async fn main(spawner: Spawner) -> ! {
 
     let _trng_source = TrngSource::new(peripherals.RNG, peripherals.ADC1);
 
-    // let mut trng = TrngSource::new(rng, adc)
-
-    // embassy_time::Timer::after_secs(10).await;
-
-    let mut flash = esp_storage::FlashStorage::new(peripherals.FLASH);
+    let mut flash = esp_storage::FlashStorage::new(peripherals.FLASH).multicore_auto_park();
 
     let mut buffer = [0u8; esp_bootloader_esp_idf::partitions::PARTITION_TABLE_MAX_LEN];
     let partition_table =
         esp_bootloader_esp_idf::partitions::read_partition_table(&mut flash, &mut buffer).unwrap();
 
-    // List all partitions - this is just FYI
     for part in partition_table.iter() {
         log::info!("partition: {:?}", part);
     }
 
     let lora_pins = chiyocore::XIAO_S3!(peripherals);
     let lora = chiyocore::lora::lora_init(lora_pins).await;
+    let (lora_app_channel, lora_rx) = LoraTaskChannel::start_lora(lora, &spawner);
 
-    let (channel, lora_rx) = chiyocore::lora::LoraTaskChannel::start_lora(lora, &spawner);
-
-    // let flash = flash;
     let partition = partition_table
         .find_partition(PartitionType::Data(DataPartitionSubType::LittleFs))
         .unwrap()
@@ -130,128 +122,129 @@ async fn main(spawner: Spawner) -> ! {
         storage: Arc::clone(&flash),
         partition_offset: partition.offset() as usize,
     };
-    let log_part: FsPartition<{ companion::handler::message_log::MESSAGE_LOG_SIZE }> =
+    let log_part: FsPartition<{ chiyocore::companionv2::message_log::MESSAGE_LOG_SIZE }> =
         FsPartition {
             storage: Arc::clone(&flash),
             partition_offset: chiyocore::partition_table::LOGS.offset as usize,
         };
 
-    let fs = Arc::new(EspMutex::new(ActiveFilesystem::build(fs_part)));
-
-    let config: CompanionConfig = SimpleFileDb::new(Arc::clone(&fs))
-        .get(littlefs2::path!("/companion/config"))
-        .await
-        .unwrap()
-        .unwrap_or_else(|| CompanionConfig {
-            wifi_ssid: String::from("your-wifi-here"),
-            wifi_password: String::from("password-here"),
-        });
-
-    let net_stack = wifi_init(
+    // let config: CompanionConfig = SimpleFileDb::new(Arc::clone(&fs))
+    //     .get(littlefs2::path!("/companion/config"))
+    //     .await
+    //     .unwrap()
+    //     .unwrap_or_else(|| CompanionConfig {
+    //         wifi_ssid: String::from("your-wifi-here"),
+    //         wifi_password: String::from("password-here"),
+    //     });
+    let net_stack = chiyocore::wifi::wifi_init(
         peripherals.WIFI,
         &spawner,
-        &rtc,
-        config.wifi_ssid.clone(),
-        config.wifi_password.clone(),
+        "".into(),
+        "".into(),
     )
     .await;
 
-    let (tcp_tx, tcp_rx) = TCP_COMPANION_CHANNEL.split();
+    chiyocore::ntp::ntp(net_stack, &rtc).await;
 
-    let mut handler = SimpleCompanion::load(
-        &fs,
-        log_part,
-        channel.clone(),
-        rtc,
-        TcpCompanionSink::new(tcp_tx),
-        PingBot,
-    )
-    .await;
-    handler.channels.register(&Channel::public()).await.unwrap();
-    handler
-        .channels
-        .register(&Channel::from_name("#emitestcorner", 1))
-        .await
-        .unwrap();
-    handler
-        .channels
-        .register(&Channel::from_name("#test", 2))
-        .await
-        .unwrap();
-    handler
-        .channels
-        .register(&Channel::from_name("#wardriving", 3))
-        .await
-        .unwrap();
-    handler
-        .channels
-        .register(&Channel::from_name("#jokes", 4))
-        .await
-        .unwrap();
+    let (tcp_tx, tcp_rx) = chiyocore::companion_protocol::tcp::TCP_COMPANION_CHANNEL.split();
 
-    log::info!("starting handler");
+    let fs = Arc::new(EspMutex::new(ActiveFilesystem::build(fs_part)));
+    let companion_db = SimpleFileDb::new(Arc::clone(&fs), littlefs2::path!("/companion/")).await;
+    let identity = if let Some(id) = companion_db
+        .get::<LocalIdentity>(c"identity")
+        .await
+        .unwrap()
+    {
+        id
+    } else {
+        let bytes = rand::Rng::random(&mut Trng::try_new().unwrap());
+        let seed = ed25519_compact::Seed::new(bytes);
+        let sk = ed25519_compact::KeyPair::from_seed(seed);
+        let id = LocalIdentity::from_sk(*sk.sk);
+        companion_db.insert(c"identity", &id).await.unwrap();
+        id
+    };
 
-    let handler = Arc::new(EspMutex::new(handler));
+    let mesh_storage = MeshStorage::new(&fs).await;
+    {
+        let mut channels = mesh_storage.channels.write().await;
+        channels
+            .insert(Channel::from_keys(0, "public", ChannelKeys::public()))
+            .await
+            .unwrap();
+        channels
+            .insert(Channel::from_keys(
+                1,
+                "#test",
+                ChannelKeys::from_hashtag("#test"),
+            ))
+            .await
+            .unwrap();
+        channels
+            .insert(Channel::from_keys(
+                2,
+                "#emitestcorner",
+                ChannelKeys::from_hashtag("#emitestcorner"),
+            ))
+            .await
+            .unwrap();
+    }
 
-    spawner.spawn(heap_log(Arc::clone(&handler))).unwrap();
+    let mesh = Arc::new(RwLock::new(SimpleMesh::new(
+        identity,
+        mesh_storage.clone(),
+        lora_app_channel.clone(),
+    )));
+    let companion = Arc::new(EspMutex::new(
+        Companion::new(
+            &rtc,
+            mesh_storage,
+            &fs,
+            log_part,
+            &mesh,
+            TcpCompanionSink::new(tcp_tx),
+        )
+        .await
+        .unwrap(),
+    ));
+    let ping_bot = Arc::new(EspMutex::new(PingBot {
+        rtc: Arc::clone(&rtc),
+    }));
 
     spawner
-        .spawn(companion::tcp::tcp_companion(
+        .spawn(chiyocore::companion_protocol::tcp::tcp_companion(
             net_stack,
             tcp_rx,
-            Arc::clone(&handler),
+            Arc::clone(&companion),
         ))
         .unwrap();
 
-    channel.run_handler(lora_rx, Arc::clone(&handler)).await;
+    // lora_app_channel.run_handler(lora_rx, mesh, companion).await;
+
+    static APP_CORE_STACK: StaticCell<Stack<16384>> = StaticCell::new();
+    let app_core_stack = APP_CORE_STACK.init(Stack::new());
+
+    esp_rtos::start_second_core(
+        peripherals.CPU_CTRL,
+        sw_int.software_interrupt1,
+        app_core_stack,
+        move || {
+            static EXECUTOR: StaticCell<Executor> = StaticCell::new();
+            let executor = EXECUTOR.init(Executor::new());
+            executor.run(|spawner| {
+                spawner
+                    .spawn(run_handler(
+                        lora_app_channel,
+                        lora_rx,
+                        mesh,
+                        (companion, ping_bot),
+                    ))
+                    .unwrap();
+            });
+        },
+    );
 
     loop {
-        embassy_time::block_for(Duration::from_secs(10));
+        embassy_time::Timer::after_secs(10).await;
     }
-}
-
-async fn wifi_init(
-    wifi: WIFI<'static>,
-    spawner: &Spawner,
-    rtc: &Rtc<'_>,
-    ssid: String,
-    password: String,
-) -> embassy_net::Stack<'static> {
-    let station_config = esp_radio::wifi::Config::Station(
-        StationConfig::default()
-            .with_ssid(ssid)
-            .with_password(password),
-    );
-
-    println!("Starting wifi");
-    let (controller, interfaces) = esp_radio::wifi::new(
-        wifi,
-        ControllerConfig::default().with_initial_config(station_config),
-    )
-    .unwrap();
-    println!("Wifi configured and started!");
-
-    let wifi_interface = interfaces.station;
-
-    let rng = esp_hal::rng::Rng::new();
-    let seed = (rng.random() as u64) << 32 | rng.random() as u64;
-
-    let embassy_net_config = embassy_net::Config::dhcpv4(Default::default());
-    let (stack, runner) = embassy_net::new(
-        wifi_interface,
-        embassy_net_config,
-        mk_static!(
-            embassy_net::StackResources<6>,
-            embassy_net::StackResources::<6>::new()
-        ),
-        seed,
-    );
-
-    spawner.spawn(chiyocore::ntp::connection(controller)).ok();
-    spawner.spawn(chiyocore::ntp::net_task(runner)).ok();
-    stack.wait_config_up().await;
-
-    chiyocore::ntp::ntp(stack, rtc).await;
-
-    stack
 }

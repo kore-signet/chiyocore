@@ -1,25 +1,74 @@
-use alloc::vec::Vec;
-use alloc::{borrow::Cow, vec};
+use alloc::borrow::Cow;
 use arrayref::array_ref;
 use esp_hal::sha::Sha1Context;
 use meshcore::{Packet, payloads::TextMessageData};
-use sequential_storage::{
-    cache::PagePointerCache,
-    queue::{QueueConfig, QueueStorage},
-};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    companion::{
-        handler::storage::{CachedContact, Channel},
-        protocol::{
-            CompanionSer,
-            responses::{ChannelMsgRecv, ContactMsgRecv},
-        },
+    EspMutex,
+    companion_protocol::protocol::{
+        CompanionSer,
+        responses::{ChannelMsgRecv, ContactMsgRecv},
     },
-    partition_table,
-    storage::FsPartition,
+    simple_mesh::storage::{channel::Channel, contact::CachedContact},
 };
+
+// use crate::companion::handler::message_log::HashableMessage;
+
+impl<'a> HashableMessage for Packet<'a> {
+    async fn hash_into(&self, hasher: &mut Sha1Context, out: &mut [u8; 20]) {
+        hasher.update(&self.header.into_bytes()).wait().await;
+        hasher.update(&self.payload).wait().await;
+
+        hasher.finalize(out).wait().await;
+    }
+}
+
+pub struct HashLog<const CAPACITY: usize> {
+    log: EspMutex<heapless::Deque<[u8; 20], CAPACITY>>,
+}
+
+impl<const CAPACITY: usize> Default for HashLog<CAPACITY> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<const CAPACITY: usize> HashLog<CAPACITY> {
+    pub fn new() -> HashLog<CAPACITY> {
+        HashLog {
+            log: EspMutex::new(heapless::Deque::new()),
+        }
+    }
+
+    pub async fn contains(&self, message: &impl HashableMessage) -> bool {
+        let hash = message.hash().await;
+        self.contains_hash(&hash).await
+    }
+
+    pub async fn contains_hash(&self, hash: &[u8; 20]) -> bool {
+        let log = self.log.lock().await;
+        let (front, back) = log.as_slices();
+        back.contains(hash) || front.contains(hash)
+    }
+
+    /// returns true if message is new
+    pub async fn push(&self, message: &impl HashableMessage) -> bool {
+        let hash = message.hash().await;
+
+        if self.contains_hash(&hash).await {
+            return false;
+        }
+
+        let mut log = self.log.lock().await;
+        if log.is_full() {
+            log.pop_back();
+        }
+
+        let _ = log.push_front(hash);
+        true
+    }
+}
 
 // copied off trim_ascii_end's impl
 pub fn trim_slice_nils(data: &[u8]) -> &[u8] {
@@ -82,7 +131,7 @@ impl<'a> SavedMessage<'a> {
         SavedMessage::Contact(ContactMsgRecv {
             snr: 0,
             reserved: [0u8; 2],
-            pk_prefix: *array_ref![contact.verify_key, 0, 6],
+            pk_prefix: *array_ref![contact.key, 0, 6],
             path_len: packet.path.len() as u8,
             text_ty: message.header.text_type(),
             timestamp: message.timestamp,
@@ -93,6 +142,15 @@ impl<'a> SavedMessage<'a> {
 }
 
 pub trait HashableMessage {
+    fn hash(&self) -> impl core::future::Future<Output = [u8; 20]> {
+        async {
+            let mut out = [0u8; 20];
+            let mut sha = Sha1Context::new();
+            self.hash_into(&mut sha, &mut out).await;
+            out
+        }
+    }
+
     fn hash_into(
         &self,
         hasher: &mut Sha1Context,
@@ -166,78 +224,5 @@ impl<'a> HashableMessage for SavedMessage<'a> {
                 .await
             }
         }
-    }
-}
-
-pub const MESSAGE_LOG_SIZE: usize = partition_table::LOGS.size as usize;
-
-pub type MessageLogStorage = QueueStorage<
-    embassy_embedded_hal::adapter::BlockingAsync<FsPartition<MESSAGE_LOG_SIZE>>,
-    PagePointerCache<8>,
->;
-
-pub struct MessageLog {
-    storage: MessageLogStorage,
-    scratch: Vec<u8>,
-    pub seen_messages: heapless::Deque<[u8; 20], 16>,
-}
-
-impl MessageLog {
-    pub fn new(partition: FsPartition<MESSAGE_LOG_SIZE>) -> MessageLog {
-        let storage = sequential_storage::queue::QueueStorage::new(
-            embassy_embedded_hal::adapter::BlockingAsync::new(partition),
-            QueueConfig::new(const { 0..(MESSAGE_LOG_SIZE - 4096) as u32 }),
-            PagePointerCache::new(),
-        );
-        MessageLog {
-            scratch: vec![0u8; 328],
-            seen_messages: heapless::Deque::new(),
-            storage,
-        }
-    }
-
-    async fn contains(&self, message: &SavedMessage<'_>) -> Option<[u8; 20]> {
-        let mut hash = [0u8; 20];
-        message.hash_into(&mut Sha1Context::new(), &mut hash).await;
-
-        let (front, back) = self.seen_messages.as_slices();
-        if front.contains(&hash) || back.contains(&hash) {
-            None
-        } else {
-            Some(hash)
-        }
-    }
-
-    pub async fn make_seen(&mut self, message: &impl HashableMessage) {
-        let mut hash = [0u8; 20];
-        message.hash_into(&mut Sha1Context::new(), &mut hash).await;
-
-        if self.seen_messages.is_full() {
-            self.seen_messages.pop_front();
-        }
-        let _ = self.seen_messages.push_back(hash);
-    }
-
-    // returns whether message is new
-    pub async fn push(&mut self, message: &SavedMessage<'_>) -> bool {
-        if let Some(msg_hash) = self.contains(message).await {
-            if self.seen_messages.is_full() {
-                self.seen_messages.pop_front();
-            }
-
-            let _ = self.seen_messages.push_back(msg_hash);
-        } else {
-            return false;
-        }
-
-        let data = postcard::to_slice(message, &mut self.scratch).unwrap();
-        self.storage.push(data, true).await.unwrap(); // todo make result
-        true
-    }
-
-    pub async fn pop(&mut self) -> Option<SavedMessage<'_>> {
-        let v = self.storage.pop(&mut self.scratch).await.unwrap()?;
-
-        Some(postcard::from_bytes(v).unwrap())
     }
 }

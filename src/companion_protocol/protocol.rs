@@ -5,11 +5,12 @@ use meshcore::{
     payloads::TextType,
 };
 use modular_bitfield::Specifier as _;
+use smol_str::SmolStr;
 use strum::FromRepr;
 
-use crate::companion::{
-    handler::storage::Contact,
-    protocol::responses::{CompanionProtoResult, CustomVars},
+use crate::{
+    companion_protocol::protocol::responses::{CompanionProtoResult, CustomVars},
+    simple_mesh::storage::contact::Contact,
 };
 
 pub trait CompanionSer {
@@ -25,11 +26,12 @@ pub mod responses {
     use serde::{Deserialize, Serialize};
     use smallvec::SmallVec;
 
-    use crate::FirmwareError;
-    use crate::companion::handler::simple_companion::CompanionError;
-
     use super::CompanionSer;
     use super::ResponseCodes;
+    use crate::CompanionError;
+    use crate::FirmwareError;
+    use crate::companion_protocol::protocol::NullPaddedString;
+    use crate::companion_protocol::protocol::StatTypes;
 
     use super::NullPaddedSlice;
 
@@ -146,7 +148,7 @@ pub mod responses {
         pub advertisement_type: u8,
         pub tx_power: u8,
         pub max_tx_power: u8,
-        pub public_key: &'a [u8; 32],
+        pub public_key: [u8; 32],
         pub lat: u32,
         pub long: u32,
         pub multi_acks: u8,
@@ -181,7 +183,7 @@ pub mod responses {
                 self.max_tx_power,
             ]);
 
-            out.write_slice(self.public_key);
+            out.write_slice(&self.public_key);
             out.write_u32_le(self.lat);
             out.write_u32_le(self.long);
 
@@ -247,13 +249,13 @@ pub mod responses {
         }
     }
 
-    pub struct ChannelInfo<'a> {
+    pub struct ChannelInfo {
         pub idx: u8,
-        pub name: NullPaddedSlice<'a, 32>,
+        pub name: NullPaddedString<32>,
         pub secret: [u8; 16],
     }
 
-    impl<'a> CompanionSer for ChannelInfo<'a> {
+    impl CompanionSer for ChannelInfo {
         fn ser_size(&self) -> usize {
             2 // packet ty, channel idx
             + 32 // channel name
@@ -608,6 +610,106 @@ pub mod responses {
             out.finish()
         }
     }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct CoreStats {
+        pub battery_mv: u16,
+        pub uptime_secs: u32,
+        pub errors: u16,
+        pub queue_len: u8,
+    }
+
+    impl CompanionSer for CoreStats {
+        fn ser_size(&self) -> usize {
+            2 + 2 + 4 + 2 + 1
+        }
+
+        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
+            let mut out = SliceWriter::new(out);
+
+            out.write_u8(0); // response code ??
+            out.write_u8(StatTypes::Core as u8);
+
+            out.write_u16_le(self.battery_mv);
+            out.write_u32_le(self.uptime_secs);
+            out.write_u16_le(self.errors);
+            out.write_u8(self.queue_len);
+
+            out.finish()
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct RadioStats {
+        pub noise_floor: i16,
+        pub last_rssi: i8,
+        pub last_snr: i8,
+        pub tx_air_secs: u32,
+        pub rx_air_secs: u32,
+    }
+
+    impl CompanionSer for RadioStats {
+        fn ser_size(&self) -> usize {
+            2 + 2 + 1 + 1 + 4 + 4
+        }
+
+        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
+            let mut out = SliceWriter::new(out);
+
+            out.write_u8(0); // response code ??
+            out.write_u8(StatTypes::Radio as u8);
+
+            out.write_i16_le(self.noise_floor);
+            out.write_i8(self.last_rssi);
+            out.write_i8(self.last_snr * 4);
+            out.write_u32_le(self.tx_air_secs);
+            out.write_u32_le(self.rx_air_secs);
+
+            out.finish()
+        }
+    }
+
+    #[derive(Clone, Copy, Debug, Default)]
+    pub struct PacketStats {
+        pub recv: u32,
+        pub sent: u32,
+        pub flood_tx: u32,
+        pub direct_tx: u32,
+        pub flood_rx: u32,
+        pub direct_rx: u32,
+        pub recv_errors: u32,
+    }
+
+    impl CompanionSer for PacketStats {
+        fn ser_size(&self) -> usize {
+            2 + 4 * 7
+        }
+
+        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
+            let mut out = SliceWriter::new(out);
+
+            out.write_u8(0);
+            out.write_u8(StatTypes::Packets as u8);
+
+            out.write_u32_le(self.recv);
+            out.write_u32_le(self.sent);
+            out.write_u32_le(self.flood_tx);
+            out.write_u32_le(self.direct_tx);
+            out.write_u32_le(self.flood_rx);
+            out.write_u32_le(self.direct_rx);
+            out.write_u32_le(self.recv_errors);
+
+            out.finish()
+        }
+    }
+}
+
+pub struct NullPaddedString<const SIZE: usize>(pub SmolStr);
+
+impl<const SIZE: usize> NullPaddedString<SIZE> {
+    pub fn encode_to(&self, out: &mut SliceWriter<'_>) {
+        NullPaddedSlice::<SIZE>(self.0.as_bytes()).encode_to(out);
+    }
 }
 
 pub struct NullPaddedSlice<'a, const SIZE: usize>(pub &'a [u8]);
@@ -705,6 +807,15 @@ pub enum HostCommandType {
     SetFloodScope = 54,
     GetCustomVars = 40,
     SetCustomVar = 41,
+    GetStats = 56,
+}
+
+#[derive(FromRepr)]
+#[repr(u8)]
+pub enum StatTypes {
+    Core = 0,
+    Radio = 1,
+    Packets = 2,
 }
 
 pub trait CompanionSink {
@@ -754,19 +865,9 @@ pub async fn parse_packet(
             .await;
         }
         GetContacts => {
-            // todo: impl since
-            let (contacts_len, contacts) = handler.get_contacts(None).await;
-            out.write_packet(&responses::ContactStart {
-                contacts: contacts_len,
-            })
-            .await;
+            let res = handler.get_contacts(None, out).await;
 
-            for contact in contacts {
-                out.write_packet(&contact).await;
-            }
-
-            out.write_packet(&responses::ContactEnd { last_mod: 0 })
-                .await; // todo: impl last_end
+            out.write_packet(&res).await;
         }
         GetCustomVars => {
             out.write_packet(&handler.get_custom_vars().await).await;
@@ -911,6 +1012,15 @@ pub async fn parse_packet(
         SetFloodScope => {
             out.write_packet(&responses::Ok { code: None }).await;
         }
+        GetStats => {
+            let stat_type =
+                StatTypes::from_repr(packet.read_u8()?).ok_or(DecodeError::UnexpectedEof)?;
+            match stat_type {
+                StatTypes::Core => out.write_packet(&handler.get_core_stats().await).await,
+                StatTypes::Radio => out.write_packet(&handler.get_radio_stats().await).await,
+                StatTypes::Packets => out.write_packet(&handler.get_packet_stats().await).await,
+            }
+        }
     }
 
     Ok(())
@@ -931,10 +1041,10 @@ pub trait CompanionHandler {
         app_ver: u8,
     ) -> impl Future<Output = CompanionProtoResult<responses::DeviceInfo<'a>>>;
 
-    fn channel_info<'a>(
-        &'a mut self,
+    fn channel_info(
+        &mut self,
         idx: u8,
-    ) -> impl Future<Output = CompanionProtoResult<responses::ChannelInfo<'a>>>;
+    ) -> impl Future<Output = CompanionProtoResult<responses::ChannelInfo>>;
 
     fn set_channel(
         &mut self,
@@ -1021,10 +1131,11 @@ pub trait CompanionHandler {
         password: &[u8],
     ) -> impl Future<Output = CompanionProtoResult<responses::MsgSent>>;
 
-    fn get_contacts<'s>(
-        &'s mut self,
+    fn get_contacts(
+        &mut self,
         since: Option<u32>,
-    ) -> impl Future<Output = (u32, impl Iterator<Item = Contact> + 's)>; // (len, iter)
+        out: &mut impl CompanionSink,
+    ) -> impl Future<Output = CompanionProtoResult<responses::ContactEnd>>;
 
     fn sign_start(&mut self) -> impl Future<Output = CompanionProtoResult<responses::SignStart>>;
 
@@ -1050,4 +1161,14 @@ pub trait CompanionHandler {
         key: &str,
         val: &str,
     ) -> impl Future<Output = CompanionProtoResult<responses::Ok>>;
+
+    fn get_core_stats(
+        &mut self,
+    ) -> impl Future<Output = CompanionProtoResult<responses::CoreStats>>;
+    fn get_radio_stats(
+        &mut self,
+    ) -> impl Future<Output = CompanionProtoResult<responses::RadioStats>>;
+    fn get_packet_stats(
+        &mut self,
+    ) -> impl Future<Output = CompanionProtoResult<responses::PacketStats>>;
 }

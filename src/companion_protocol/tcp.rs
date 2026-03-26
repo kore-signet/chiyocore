@@ -1,5 +1,5 @@
 use alloc::{sync::Arc, vec::Vec};
-use embassy_net::tcp::TcpSocket;
+use embassy_net::tcp::{State, TcpSocket};
 use embassy_time::Duration;
 use embedded_io_async::Write;
 use meshcore::io::TinyReadExt;
@@ -7,10 +7,10 @@ use smallvec::SmallVec;
 use thingbuf::mpsc::StaticChannel;
 use thingbuf::recycling::DefaultRecycle;
 
-use crate::EspMutex;
-use crate::companion::handler::simple_companion::SimpleCompanion;
-use crate::companion::protocol::{CompanionSer, CompanionSink};
-use crate::ping_bot::PingBot;
+use crate::companion_protocol::protocol::{CompanionSer, CompanionSink};
+use crate::companionv2::Companion;
+// use crate::ping_bot::PingBot;
+use crate::{EspMutex, companion_protocol};
 
 pub static TCP_COMPANION_CHANNEL: StaticChannel<SmallVec<[u8; 256]>, 2> = StaticChannel::new();
 
@@ -69,7 +69,7 @@ impl CompanionSink for TcpCompanionSink {
 pub async fn tcp_companion(
     stack: embassy_net::Stack<'static>,
     packet_rx: thingbuf::mpsc::StaticReceiver<SmallVec<[u8; 256]>, DefaultRecycle>,
-    handler: Arc<EspMutex<SimpleCompanion<PingBot>>>,
+    handler: Arc<EspMutex<Companion>>,
 ) {
     let mut tcp_rx_buf = [0u8; 4096];
     let mut tcp_tx_buf = [0u8; 4096];
@@ -88,9 +88,22 @@ pub async fn tcp_companion(
         log::info!("companion connected!");
 
         'recv_loop: loop {
-            match embassy_futures::select::select(tcp.wait_read_ready(), packet_rx.recv_ref()).await
+            let wait_closed = async {
+                loop {
+                    if tcp.state() == State::Closed || !tcp.may_send() || !tcp.may_recv() {
+                        return;
+                    }
+                    embassy_time::Timer::after_millis(1000).await;
+                }
+            };
+            match embassy_futures::select::select3(
+                tcp.wait_read_ready(),
+                packet_rx.recv_ref(),
+                wait_closed,
+            )
+            .await
             {
-                embassy_futures::select::Either::First(_) => {
+                embassy_futures::select::Either3::First(_) => {
                     let bytes_read = tcp.read(&mut read_buf).await.unwrap();
                     if bytes_read == 0 {
                         break;
@@ -101,7 +114,7 @@ pub async fn tcp_companion(
                         let len = recvd.read_u16_le().unwrap();
                         let frame_data = recvd.read_slice(len as usize).unwrap();
                         let mut handler = handler.lock().await;
-                        if let Err(e) = crate::companion::protocol::parse_packet(
+                        if let Err(e) = companion_protocol::protocol::parse_packet(
                             frame_data,
                             &mut *handler,
                             &mut TcpFrameSink {
@@ -113,15 +126,29 @@ pub async fn tcp_companion(
                         {
                             log::error!("err: {e:?}");
                         }
+
+                        if let Err(e) = tcp.flush().await {
+                            log::error!("err: {e:?}");
+                            break 'recv_loop;
+                        }
                     }
                 }
-                embassy_futures::select::Either::Second(packet) => {
+                embassy_futures::select::Either3::Second(packet) => {
                     log::info!("tcp tx");
                     let Some(packet) = packet else { continue };
                     if let Err(e) = tcp.write_all(&packet[..]).await {
                         log::error!("err: {e:?}");
                         break 'recv_loop;
                     }
+
+                    if let Err(e) = tcp.flush().await {
+                        log::error!("err: {e:?}");
+                        break 'recv_loop;
+                    }
+                }
+                embassy_futures::select::Either3::Third(_) => {
+                    log::error!("reset");
+                    break 'recv_loop;
                 }
             }
         }

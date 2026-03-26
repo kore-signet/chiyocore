@@ -2,7 +2,11 @@ use core::time::Duration;
 
 use alloc::sync::Arc;
 use embassy_futures::select::Either;
-use esp_hal::gpio::{InputPin, OutputPin};
+use embassy_sync::rwlock::RwLock;
+use esp_hal::{
+    gpio::{InputPin, OutputPin},
+    time::Instant,
+};
 use lora_phy::{
     LoRa,
     mod_params::{ModulationParams, PacketParams, PacketStatus},
@@ -13,7 +17,10 @@ use rand::Rng;
 use static_cell::StaticCell;
 use thingbuf::{mpsc::StaticChannel, recycling::DefaultRecycle};
 
-use crate::{DataWithSnr, EspMutex, FirmwareError, FirmwareResult, MeshcoreHandler};
+use crate::{
+    DataWithSnr, EspMutex, FirmwareError, FirmwareResult, MeshcoreHandler,
+    simple_mesh::{SimpleMesh, SimpleMeshLayer},
+};
 
 pub const LORA_FREQUENCY_IN_HZ: u32 = 910_525_000; // WARNING: Set this appropriately for the region
 
@@ -286,10 +293,6 @@ pub async fn lora_task(
     }
 }
 
-// static LORA_TRANSMIT_CHANNEL: StaticChannel<Vec<u8>, 16, WithCapacity> =
-// StaticChannel::with_recycle(WithCapacity::new().with_max_capacity(128));
-// static LORA_RECEIVE_CHANNEL: StaticChannel<DataWithSnr, 16, WithCapacity> =
-// StaticChannel::with_recycle(WithCapacity::new().with_max_capacity(128));
 static LORA_TRANSMIT_CHANNEL: StaticChannel<heapless::Vec<u8, 256>, 16> = StaticChannel::new();
 static LORA_RECEIVE_CHANNEL: StaticChannel<DataWithSnr, 16> = StaticChannel::new();
 
@@ -307,18 +310,6 @@ impl LoraTaskChannel {
         Self,
         thingbuf::mpsc::StaticReceiver<DataWithSnr, DefaultRecycle>,
     ) {
-        // let (receive_tx, receive_rx) = thingbuf::mpsc::with_recycle(
-        //     16,
-        //     WithCapacity::new()
-        //         .with_max_capacity(128)
-        //         .with_min_capacity(32),
-        // );
-        // let (transmit_tx, transmit_rx) = thingbuf::mpsc::with_recycle(
-        //     16,
-        //     WithCapacity::new()
-        //         .with_max_capacity(128)
-        //         .with_min_capacity(32),
-        // );
         let (receive_tx, receive_rx) = LORA_RECEIVE_CHANNEL.split();
         let (transmit_tx, transmit_rx) = LORA_TRANSMIT_CHANNEL.split();
         let radio = Radio::new(lora).unwrap();
@@ -339,9 +330,14 @@ impl LoraTaskChannel {
     pub async fn run_handler(
         self,
         rx: thingbuf::mpsc::StaticReceiver<DataWithSnr, DefaultRecycle>,
-        handler: Arc<EspMutex<impl MeshcoreHandler>>,
+        handler: Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
+        layer: (
+            Arc<EspMutex<impl SimpleMeshLayer + 'static>>,
+            Arc<EspMutex<impl SimpleMeshLayer + 'static>>,
+        ),
     ) {
         while let Some(rx_slot) = rx.recv_ref().await {
+            let start = Instant::now();
             let Ok(packet) = meshcore::Packet::decode(&rx_slot.0) else {
                 continue;
             };
@@ -349,11 +345,22 @@ impl LoraTaskChannel {
             // packet.snr = Some(rx_slot.1.snr);
             // packet.rssi = Some(rx_slot.1.rssi);
 
-            let mut handler = handler.lock().await;
+            let mut handler = handler.write().await;
+            let (mut layer_a, mut layer_b) = (layer.0.lock().await, layer.1.lock().await);
 
-            if let Err(e) = handler.packet(&packet, rx_slot.1, &rx_slot.0[..]).await {
+            if let Err(e) = handler
+                .packet(
+                    &packet,
+                    rx_slot.1,
+                    &rx_slot.0[..],
+                    &mut (&mut *layer_a, &mut *layer_b),
+                )
+                .await
+            {
                 log::error!("handler error: {e:?}");
             }
+
+            log::info!("packet took: {}", start.elapsed());
         }
     }
 

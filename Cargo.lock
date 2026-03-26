@@ -199,6 +199,7 @@ dependencies = [
  "arrayref",
  "base64 0.22.1",
  "bumpalo",
+ "const-hex",
  "convert_case",
  "critical-section",
  "csv",
@@ -220,16 +221,20 @@ dependencies = [
  "esp-rtos",
  "esp-storage",
  "esp-sync",
+ "futures-util",
  "heapless 0.9.2",
  "hex",
  "hex_lit",
  "hmac",
+ "impl-trait-for-tuples",
+ "itoa",
  "litemap",
  "littlefs2",
  "log",
  "lora-phy",
  "memchr",
  "meshcore",
+ "micromap",
  "modular-bitfield",
  "ouroboros",
  "postcard",
@@ -1053,6 +1058,10 @@ dependencies = [
  "document-features",
  "embassy-net-driver",
  "embassy-sync 0.7.2",
+ "embedded-io 0.6.1",
+ "embedded-io 0.7.1",
+ "embedded-io-async 0.6.1",
+ "embedded-io-async 0.7.0",
  "enumset",
  "esp-alloc",
  "esp-config",
@@ -1415,6 +1424,17 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
 
 [[package]]
+name = "impl-trait-for-tuples"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a0eb5a3343abf848c0984fe4604b2b105da9539376e24fc0a3b0007411ae4fd9"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "indexmap"
 version = "2.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1608,7 +1628,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "meshcore"
 version = "0.1.0"
-source = "git+https://github.com/kore-signet/meshcore.git#669c1660dce6549ac63698702d3f8affd773c914"
+source = "git+https://github.com/kore-signet/meshcore.git#466f4db0bfca87d37df8c32a3b8a2bb262a25a87"
 dependencies = [
  "aes",
  "arrayref",
@@ -1628,6 +1648,12 @@ dependencies = [
  "sha2",
  "yoke",
 ]
+
+[[package]]
+name = "micromap"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c2a86d3146ed3995b5913c414f6664344b9617457320782e64f0bb44afd49d74"
 
 [[package]]
 name = "minimal-lexical"
