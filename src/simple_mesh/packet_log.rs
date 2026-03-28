@@ -1,7 +1,7 @@
 use alloc::borrow::Cow;
 use arrayref::array_ref;
 use esp_hal::sha::Sha1Context;
-use meshcore::{Packet, payloads::TextMessageData};
+use meshcore::{Packet, PayloadType, payloads::TextMessageData};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -19,6 +19,10 @@ impl<'a> HashableMessage for Packet<'a> {
     async fn hash_into(&self, hasher: &mut Sha1Context, out: &mut [u8; 20]) {
         hasher.update(&self.header.into_bytes()).wait().await;
         hasher.update(&self.payload).wait().await;
+
+        if self.header.payload_type() == PayloadType::Trace {
+            hasher.update(self.path.raw_bytes()).wait().await;
+        }
 
         hasher.finalize(out).wait().await;
     }

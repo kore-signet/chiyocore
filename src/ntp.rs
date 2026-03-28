@@ -1,14 +1,14 @@
 use core::net::SocketAddr;
 
+use alloc::sync::Arc;
 use embassy_net::{
     dns::{self},
     udp::{PacketMetadata, UdpSocket},
 };
 use embassy_time::{Duration, Timer};
 use esp_hal::rtc_cntl::Rtc;
-use esp_println::println;
 // use esp_radio::wifi::{ClientConfig, ScanConfig, WifiController, WifiDevice, WifiEvent};
-use log::info;
+use log::{info, trace};
 use sntpc::{NtpContext, NtpTimestampGenerator, get_time};
 use sntpc_net_embassy::UdpSocketWrapper;
 
@@ -37,17 +37,25 @@ impl NtpTimestampGenerator for Timestamp<'_> {
     }
 }
 
-pub async fn ntp(stack: embassy_net::Stack<'static>, rtc: &Rtc<'_>) {
+#[embassy_executor::task]
+pub async fn ntp_task(stack: embassy_net::Stack<'static>, rtc: Arc<Rtc<'static>>) {
+    const NTP_DELAY: embassy_time::Duration = embassy_time::Duration::from_secs(30);
+
     loop {
-        let res =
-            embassy_time::with_timeout(Duration::from_millis(1000), ntp_one(stack, rtc)).await;
-        if res.is_ok() {
-            break;
+        'inner: loop {
+            let res =
+                embassy_time::with_timeout(Duration::from_millis(1000), ntp_once(stack, &rtc))
+                    .await;
+            if res.is_ok() {
+                break 'inner;
+            }
         }
+
+        embassy_time::Timer::after(NTP_DELAY).await;
     }
 }
 
-pub async fn ntp_one(stack: embassy_net::Stack<'static>, rtc: &Rtc<'_>) {
+pub async fn ntp_once(stack: embassy_net::Stack<'static>, rtc: &Rtc<'_>) {
     loop {
         if stack.is_link_up() {
             break;
@@ -55,10 +63,10 @@ pub async fn ntp_one(stack: embassy_net::Stack<'static>, rtc: &Rtc<'_>) {
         Timer::after(Duration::from_millis(500)).await;
     }
 
-    println!("Waiting to get IP address...");
+    // println!("Waiting to get IP address...");
     loop {
-        if let Some(config) = stack.config_v4() {
-            println!("Got IP: {}", config.address);
+        if let Some(_config) = stack.config_v4() {
+            // println!("Got IP: {}", config.address);
             break;
         }
         Timer::after(Duration::from_millis(1000)).await;
@@ -66,13 +74,13 @@ pub async fn ntp_one(stack: embassy_net::Stack<'static>, rtc: &Rtc<'_>) {
 
     const BUFF_SZ: usize = 4096;
 
-    info!("Prepare NTP lookup");
+    trace!("Prepare NTP lookup");
     let mut ip_addr = stack
         .dns_query(NTP_SERVER, dns::DnsQueryType::A)
         .await
         .unwrap();
     let addr = ip_addr.pop().unwrap();
-    info!("NTP DNS: {:?}", addr);
+    trace!("NTP DNS: {:?}", addr);
 
     let s_addr = SocketAddr::from((addr, 123));
 
@@ -102,7 +110,7 @@ pub async fn ntp_one(stack: embassy_net::Stack<'static>, rtc: &Rtc<'_>) {
     rtc.set_current_time_us(
         (result.sec() as u64 * USEC_IN_SEC) + ((result.sec_fraction() as u64 * USEC_IN_SEC) >> 32),
     );
-    info!("NTP response");
+    trace!("NTP response");
 
-    info!("Current time: {}", result.seconds);
+    info!("ntp sync'd to: {}", result.seconds);
 }

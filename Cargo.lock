@@ -223,10 +223,7 @@ dependencies = [
  "esp-sync",
  "futures-util",
  "heapless 0.9.2",
- "hex",
- "hex_lit",
  "hmac",
- "impl-trait-for-tuples",
  "itoa",
  "litemap",
  "littlefs2",
@@ -234,7 +231,6 @@ dependencies = [
  "lora-phy",
  "memchr",
  "meshcore",
- "micromap",
  "modular-bitfield",
  "ouroboros",
  "postcard",
@@ -1397,12 +1393,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7f24254aa9a54b5c858eaee2f5bccdb46aaf0e486a595ed5fd8f86ba55232a70"
 
 [[package]]
-name = "hex_lit"
-version = "0.1.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3011d1213f159867b13cfd6ac92d2cd5f1345762c63be3554e84092d85a50bbd"
-
-[[package]]
 name = "hmac"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1422,17 +1412,6 @@ name = "ident_case"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b9e0384b61958566e926dc50660321d12159025e767c18e043daf26b70104c39"
-
-[[package]]
-name = "impl-trait-for-tuples"
-version = "0.2.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a0eb5a3343abf848c0984fe4604b2b105da9539376e24fc0a3b0007411ae4fd9"
-dependencies = [
- "proc-macro2",
- "quote",
- "syn 2.0.117",
-]
 
 [[package]]
 name = "indexmap"
@@ -1628,7 +1607,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "meshcore"
 version = "0.1.0"
-source = "git+https://github.com/kore-signet/meshcore.git#466f4db0bfca87d37df8c32a3b8a2bb262a25a87"
+source = "git+https://github.com/kore-signet/meshcore.git#f57c67afe34694bc16fe718317550d429d1f74d2"
 dependencies = [
  "aes",
  "arrayref",
@@ -1648,12 +1627,6 @@ dependencies = [
  "sha2",
  "yoke",
 ]
-
-[[package]]
-name = "micromap"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2a86d3146ed3995b5913c414f6664344b9617457320782e64f0bb44afd49d74"
 
 [[package]]
 name = "minimal-lexical"

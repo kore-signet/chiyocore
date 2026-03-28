@@ -1,14 +1,18 @@
 use core::time::Duration;
 
-use alloc::{borrow::Cow, string::String};
+use alloc::{borrow::Cow, string::String, sync::Arc, vec::Vec};
 use arrayref::array_ref;
+use esp_hal::rtc_cntl::Rtc;
 use lora_phy::mod_params::PacketStatus;
 use meshcore::{
     Packet, PacketHeader, PacketPayload, Path, PathHashMode, PayloadType, RouteType, SerDeser,
     crypto::{ChannelKeys, ContainsEncryptable, DecryptedView, Encryptable, VerifiablePayload},
     identity::{ForeignIdentity, LocalIdentity},
     io::ByteVecImpl,
-    payloads::{Ack, Advert, EncryptedMessageWithDst, GroupText, ReturnedPath, TextMessageData},
+    payloads::{
+        Ack, Advert, AnonymousRequest, ControlPayload, EncryptedMessageWithDst, GroupText,
+        RequestPayload, ResponsePayload, ReturnedPath, TextMessageData, TracePacket,
+    },
 };
 
 use crate::{
@@ -22,6 +26,7 @@ use crate::{
             MeshStorage,
             channel::Channel,
             contact::{CachedContact, Contact},
+            shared_key_cache::SharedKeyCache,
         },
     },
 };
@@ -37,7 +42,8 @@ pub struct SimpleMesh {
     pub scratch: bumpalo::Bump,
     pub path_hash_mode: PathHashMode,
     pub storage: MeshStorage,
-    // layers: SmallVec<[Arc<EspMutex<Box<dyn SimpleMeshLayer + Send>>>; 2]>, // don't love this triple allocation
+    pub rtc: Arc<Rtc<'static>>,
+    key_cache: SharedKeyCache, // layers: SmallVec<[Arc<EspMutex<Box<dyn SimpleMeshLayer + Send>>>; 2]>, // don't love this triple allocation
 }
 
 impl SimpleMesh {
@@ -45,14 +51,17 @@ impl SimpleMesh {
         identity: LocalIdentity,
         storage: MeshStorage,
         lora_tx: LoraTaskChannel,
+        rtc: &Arc<Rtc<'static>>
     ) -> SimpleMesh {
         SimpleMesh {
+            key_cache: SharedKeyCache::new(&identity),
             identity,
             packet_log: HashLog::new(),
             message_log: HashLog::new(),
             lora_tx,
             scratch: bumpalo::Bump::new(),
             path_hash_mode: PathHashMode::OneByte,
+            rtc: Arc::clone(rtc),
             storage,
         }
     }
@@ -83,10 +92,17 @@ impl SimpleMesh {
         let mut encrypt_scratch = BumpaloVec::new_in(&self.scratch);
         let mut encode_vec = BumpaloVec::new_in(&self.scratch);
 
+        let shared_key = self.key_cache.get_key(contact).await;
+
         EncryptedMessageWithDst::encode_into_vec(
             &self
                 .identity
-                .make_message::<P, HardwareAES>(message, contact, &mut encrypt_scratch)
+                .make_message_with_key::<P, HardwareAES>(
+                    message,
+                    contact.verify_key[0],
+                    shared_key,
+                    &mut encrypt_scratch,
+                )
                 .await?,
             &mut encode_vec,
         )
@@ -114,6 +130,40 @@ impl SimpleMesh {
         Ok(timeout)
     }
 
+    pub async fn send_anon_req<P: SerDeser + Encryptable>(&self, contact: &ForeignIdentity, path: Option<meshcore::Path<'_>>, message: &P::Representation<'_>) -> CompanionResult<Duration> {
+        let mut scratch = BumpaloVec::new_in(&self.scratch);
+        let anon_req = self
+            .identity
+            .make_anon_req::<P, HardwareAES>(
+                message,
+                contact,
+                &mut scratch,
+            )
+            .await
+            .unwrap();
+        let anon_req_bytes = AnonymousRequest::encode_to_vec(&anon_req).unwrap();
+
+        let packet = Packet {
+            header: PacketHeader::new()
+                .with_payload_type(PayloadType::AnonReq)
+                .with_route_type(if path.is_some() {
+                    meshcore::RouteType::Direct
+                } else {
+                    meshcore::RouteType::Flood
+                }),
+            transport_codes: None,
+            path: path
+                .unwrap_or(Path::empty(self.path_hash_mode)),
+            payload: anon_req_bytes.into(),
+        };
+
+        self.packet_log.push(&packet).await;
+
+        let timeout = self.lora_tx.send_packet(&packet).await;
+
+        Ok(timeout)
+    }
+
     pub async fn send_direct_message(
         &self,
         contact: &ForeignIdentity,
@@ -129,7 +179,7 @@ impl SimpleMesh {
         Ok(MsgSent {
             is_flood,
             expected_ack: ack.crc,
-            suggested_timeout: timeout.as_secs() as u32,
+            suggested_timeout: timeout.as_millis() as u32,
         })
     }
 
@@ -315,6 +365,50 @@ pub trait SimpleMeshLayer {
         contact: &'f CachedContact,
         path: &'f ReturnedPath<'_>,
     ) -> impl Future<Output = CompanionResult<()>>;
+
+    fn response<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        contact: &'f CachedContact,
+        response: &'f [u8],
+    ) -> impl Future<Output = CompanionResult<()>>;
+
+    fn request<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        contact: &'f CachedContact,
+        request: &'f RequestPayload<'_>,
+    ) -> impl Future<Output = CompanionResult<()>>;
+
+    fn anonymous_request<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        contact: &'f ForeignIdentity,
+        data: &'f [u8],
+    ) -> impl Future<Output = CompanionResult<()>>;
+
+    fn trace_packet<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        snrs: &'f [i8],
+        trace: &'f TracePacket<'_>,
+    ) -> impl Future<Output = CompanionResult<()>>;
+
+    fn control_packet<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        payload: &'f ControlPayload,
+    ) -> impl Future<Output = CompanionResult<()>>;
 }
 
 impl SimpleMesh {
@@ -346,7 +440,14 @@ impl SimpleMesh {
             return Err(CompanionError::NoKnownContact);
         };
 
-        let shared_secret = self.identity.shared_secret(&other_ident.as_identity());
+        // let shared_secret = self.identity.shared_secret(&other_ident.as_identity());
+        let shared_secret = self.key_cache.get_key(&other_ident.as_identity()).await;
+
+        // if !payload.verify::<HardwareHMAC>(array_ref![&shared_secret, 16, 16]) {
+        //     log::error!("\tmessage failed verify");
+        //     return Err(CompanionError::VerifyFailure);
+        // }
+
         let Ok(msg) = payload
             .decrypt::<HardwareAES>(array_ref![&shared_secret, 0, 16], scratch)
             .await
@@ -523,7 +624,7 @@ impl SimpleMesh {
                 flags: appdata.flags.bits(),
                 latitude: appdata.latitude.unwrap_or(0),
                 longitude: appdata.longitude.unwrap_or(0),
-                last_heard: 0, // last_heard: (self.rtc.current_time_us() / 1_000_000) as u32,
+                last_heard: (self.rtc.current_time_us() / 1_000_000) as u32,
             })
             .await?;
 
@@ -562,9 +663,144 @@ impl SimpleMesh {
             .await;
         // }
 
-        if let Ok(ack) = decoded.decode_payload_as::<Ack>() {
-            self.ack(packet, packet_status, ack, layers);
+        let Some((extra_ty, extra_bytes)) = decoded.extra.as_ref() else {
+            return Ok(());
+        };
+        match extra_ty {
+            PayloadType::Ack => {
+                self.ack(
+                    packet,
+                    packet_status,
+                    decoded.decode_payload_as::<Ack>()?,
+                    layers,
+                )
+                .await?
+            }
+            PayloadType::Response => {
+                layers
+                    .response(self, packet, packet_status, &contact, extra_bytes)
+                    .await?
+            }
+            _ => {}
         }
+
+        Ok(())
+    }
+
+    async fn response(
+        &self,
+        packet: &Packet<'_>,
+        packet_status: PacketStatus,
+        message: EncryptedMessageWithDst<'_, ResponsePayload<'static, Cow<'_, [u8]>>>,
+        layers: &mut impl SimpleMeshLayer,
+    ) -> CompanionResult<()> {
+        let mut decrypt_scratch = BumpaloVec::new_in(&self.scratch);
+        let Some((contact, res)) = self
+            .decode_contact_message::<ResponsePayload<'_, Cow<'_, [u8]>>>(
+                &message,
+                &mut decrypt_scratch,
+            )
+            .await?
+        else {
+            return Ok(());
+        };
+
+        log::info!("decoded response");
+
+        let decoded = res.decoded()?;
+        layers
+            .response(self, packet, packet_status, &contact, &decoded.data)
+            .await;
+
+        Ok(())
+    }
+
+    async fn request(
+        &self,
+        packet: &Packet<'_>,
+        packet_status: PacketStatus,
+        message: EncryptedMessageWithDst<'_, RequestPayload<'static>>,
+        layers: &mut impl SimpleMeshLayer,
+    ) -> CompanionResult<()> {
+        let mut decrypt_scratch = BumpaloVec::new_in(&self.scratch);
+        let Some((contact, res)) = self
+            .decode_contact_message::<RequestPayload<'_>>(&message, &mut decrypt_scratch)
+            .await?
+        else {
+            return Ok(());
+        };
+
+        log::info!("decoded request");
+
+        let decoded = res.decoded()?;
+        layers
+            .request(self, packet, packet_status, &contact, &decoded)
+            .await;
+
+        Ok(())
+    }
+
+    async fn anonymous_request(
+        &self,
+        packet: &Packet<'_>,
+        packet_status: PacketStatus,
+        message: AnonymousRequest<'_, Cow<'static, [u8]>>,
+        layers: &mut impl SimpleMeshLayer,
+    ) -> CompanionResult<()> {
+        if message.destination_hash != self.identity.pubkey()[0] {
+            return Ok(());
+        }
+
+        let mut decrypt_scratch = BumpaloVec::new_in(&self.scratch);
+
+        let other_ident = ForeignIdentity::new(message.sender_key);
+        let shared_key = self.identity.shared_secret(&other_ident);
+
+        if !message.verify::<HardwareHMAC>(array_ref![&shared_key, 16, 16]) {
+            log::error!("\tanon req failed verify");
+            return Err(CompanionError::VerifyFailure);
+        }
+
+        let decrypted = message
+            .decrypt::<HardwareAES>(array_ref![&shared_key, 0, 16], &mut decrypt_scratch)
+            .await?;
+        let decoded = decrypted.decoded()?;
+        layers
+            .anonymous_request(self, packet, packet_status, &other_ident, &decoded)
+            .await;
+
+        Ok(())
+    }
+
+    async fn control_packet(
+        &self,
+        packet: &Packet<'_>,
+        packet_status: PacketStatus,
+        message: ControlPayload,
+        layers: &mut impl SimpleMeshLayer,
+    ) -> CompanionResult<()> {
+        layers.control_packet(self, packet, packet_status, &message).await;
+        Ok(())
+    }
+
+    async fn trace_packet(
+        &self,
+        packet: &Packet<'_>,
+        packet_status: PacketStatus,
+        message: TracePacket<'_>,
+        layers: &mut impl SimpleMeshLayer,
+    ) -> CompanionResult<()> {
+        let snrs = unsafe { core::mem::transmute::<&[u8], &[i8]>(packet.path.raw_bytes()) };
+
+        layers
+            .trace_packet(self, packet, packet_status, snrs, &message)
+            .await;
+
+        log::info!(
+            "\ttrace | path: {:?} | snrs: {:?}",
+            message.path,
+            snrs.iter().map(|v| *v as f32 / 4.0).collect::<Vec<_>>()
+        );
 
         Ok(())
     }
@@ -590,8 +826,30 @@ impl MeshcoreHandler for SimpleMesh {
         // }
         //
         match packet.header.payload_type() {
-            PayloadType::Request => {}
-            PayloadType::Response => {}
+            PayloadType::Request => {
+                self.request(
+                    packet,
+                    packet_status,
+                    packet
+                        .decode_payload_as::<EncryptedMessageWithDst<'_, RequestPayload<'static>>>(
+                        )?,
+                    extra,
+                )
+                .await?;
+            }
+            PayloadType::Response => {
+                self
+                    .response(
+                        packet,
+                        packet_status,
+                        packet.decode_payload_as::<EncryptedMessageWithDst<
+                            '_,
+                            ResponsePayload<'static, Cow<'static, [u8]>>,
+                        >>()?,
+                        extra,
+                    )
+                    .await?;
+            }
             PayloadType::TxtMsg => {
                 self.text_message(
                     packet,
@@ -630,7 +888,15 @@ impl MeshcoreHandler for SimpleMesh {
                 )
                 .await?;
             }
-            PayloadType::AnonReq => {}
+            PayloadType::AnonReq => {
+                self.anonymous_request(
+                    packet,
+                    packet_status,
+                    packet.decode_payload_as::<AnonymousRequest<'_, Cow<'static, [u8]>>>()?,
+                    extra,
+                )
+                .await?;
+            }
             PayloadType::Path => {
                 self.returned_path(
                     packet,
@@ -642,9 +908,26 @@ impl MeshcoreHandler for SimpleMesh {
                 )
                 .await?;
             }
-            PayloadType::Trace => {}
+            PayloadType::Trace => {
+                // TODO: pretty sure this is broken for multi-byte paths
+                self.trace_packet(
+                    packet,
+                    packet_status,
+                    packet.decode_payload_as::<TracePacket<'_>>()?,
+                    extra,
+                )
+                .await?;
+            }
             PayloadType::Multipart => {}
-            PayloadType::Control => {}
+            PayloadType::Control => {
+                self.control_packet(
+                    packet,
+                    packet_status,
+                    packet.decode_payload_as::<ControlPayload>()?,
+                    extra,
+                )
+                .await?;
+            }
             PayloadType::RawCustom => {}
         }
 
@@ -783,6 +1066,106 @@ macro_rules! impl_mesh_layer_tuple {
                     let ($($var),*) = $join(
                         $(
                            $var.returned_path(mesh, packet, packet_status, contact, path)
+                        ),*
+                    ).await;
+                    $(
+                        $var?;
+                    )*
+                    Ok(())
+                }
+
+                async fn response<'f>(
+                    &'f mut self,
+                    mesh: &'f SimpleMesh,
+                    packet: &'f Packet<'_>,
+                    packet_status: PacketStatus,
+                    contact: &'f CachedContact,
+                    response_bytes: &'f [u8]
+                ) -> CompanionResult<()> {
+                    let ($($var),*) = self;
+                    let ($($var),*) = $join(
+                        $(
+                           $var.response(mesh, packet, packet_status, contact, response_bytes)
+                        ),*
+                    ).await;
+                    $(
+                        $var?;
+                    )*
+                    Ok(())
+                }
+
+                async fn request<'f>(
+                    &'f mut self,
+                    mesh: &'f SimpleMesh,
+                    packet: &'f Packet<'_>,
+                    packet_status: PacketStatus,
+                    contact: &'f CachedContact,
+                    request: &'f RequestPayload<'_>
+                ) -> CompanionResult<()> {
+                    let ($($var),*) = self;
+                    let ($($var),*) = $join(
+                        $(
+                           $var.request(mesh, packet, packet_status, contact, request)
+                        ),*
+                    ).await;
+                    $(
+                        $var?;
+                    )*
+                    Ok(())
+                }
+
+                async fn anonymous_request<'f>(
+                    &'f mut self,
+                    mesh: &'f SimpleMesh,
+                    packet: &'f Packet<'_>,
+                    packet_status: PacketStatus,
+                    contact: &'f ForeignIdentity,
+                    request: &'f [u8]
+                ) -> CompanionResult<()> {
+                    let ($($var),*) = self;
+                    let ($($var),*) = $join(
+                        $(
+                           $var.anonymous_request(mesh, packet, packet_status, contact, request)
+                        ),*
+                    ).await;
+                    $(
+                        $var?;
+                    )*
+                    Ok(())
+                }
+
+
+                async fn trace_packet<'f>(
+                    &'f mut self,
+                    mesh: &'f SimpleMesh,
+                    packet: &'f Packet<'_>,
+                    packet_status: PacketStatus,
+                    snrs: &'f [i8],
+                    trace: &'f TracePacket<'_>
+                ) -> CompanionResult<()> {
+                    let ($($var),*) = self;
+                    let ($($var),*) = $join(
+                        $(
+                           $var.trace_packet(mesh, packet, packet_status, snrs, trace)
+                        ),*
+                    ).await;
+                    $(
+                        $var?;
+                    )*
+                    Ok(())
+                }
+
+                async fn control_packet<'f>(
+                    &'f mut self,
+                    mesh: &'f SimpleMesh,
+                    packet: &'f Packet<'_>,
+                    packet_status: PacketStatus,
+                    payload: &'f ControlPayload
+                ) -> CompanionResult<()> {
+                    let ($($var),*) = self;
+                    let ($($var),*) = $join(
+                        $(
+                           $var.control_packet(mesh, packet, packet_status, payload)
                         ),*
                     ).await;
                     $(

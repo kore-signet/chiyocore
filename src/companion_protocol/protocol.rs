@@ -1,6 +1,6 @@
 use alloc::string::String;
 use meshcore::{
-    DecodeError, DecodeResult, Path,
+    DecodeError, DecodeResult, Path, PathHashMode,
     io::{SliceWriter, TinyReadExt},
     payloads::TextType,
 };
@@ -22,6 +22,8 @@ pub mod responses {
     use alloc::borrow::Cow;
 
     use lora_phy::mod_params::PacketStatus;
+    use meshcore::Path;
+    use meshcore::repeater_protocol::Permissions;
     use meshcore::{io::SliceWriter, payloads::TextType};
     use serde::{Deserialize, Serialize};
     use smallvec::SmallVec;
@@ -511,7 +513,7 @@ pub mod responses {
     }
 
     pub struct LoginSuccess {
-        pub reserved: u8,
+        pub permissions: Permissions,
         pub prefix: [u8; 6],
     }
 
@@ -523,7 +525,7 @@ pub mod responses {
         fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
             let mut out = SliceWriter::new(out);
             out.write_u8(ResponseCodes::LoginSuccess as u8);
-            out.write_u8(self.reserved);
+            out.write_u8(self.permissions.into_bytes()[0]);
             out.write_slice(&self.prefix);
             out.finish()
         }
@@ -702,6 +704,95 @@ pub mod responses {
             out.finish()
         }
     }
+
+    pub struct TraceData<'a> {
+        pub reserved: u8,
+        pub flags: u8,
+        pub tag: [u8; 4],
+        pub auth_code: [u8; 4],
+        pub path: Path<'a>,
+        pub snrs: Cow<'a, [i8]>,
+        pub last_snr: i8,
+    }
+
+    impl<'a> CompanionSer for TraceData<'a> {
+        fn ser_size(&self) -> usize {
+            1 // code
+            + 1 // reserved
+            + 1 // path_len
+            + 1 // flags
+            + 4 // tag
+            + 4 // auth_code
+            + self.path.raw_bytes().len()
+            + self.snrs.len()
+            + 1 // last_snr
+        }
+
+        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
+            let mut out = SliceWriter::new(out);
+
+            out.write_u8(ResponseCodes::TraceData as u8);
+            out.write_u8(self.reserved);
+            out.write_u8(self.path.len() as u8);
+            out.write_u8(self.flags | (self.path.mode as u8 & 0x03));
+            out.write_slice(&self.tag);
+            out.write_slice(&self.auth_code);
+            out.write_slice(self.path.raw_bytes());
+            out.write_slice(unsafe { core::mem::transmute::<&[i8], &[u8]>(&self.snrs) });
+            out.write_i8(self.last_snr);
+
+            out.finish()
+        }
+    }
+
+    pub struct ControlData<'a> {
+        pub snr: i8,
+        pub rssi: i8,
+        pub path_len: u8,
+        pub payload: Cow<'a, [u8]>,
+    }
+
+    impl<'a> CompanionSer for ControlData<'a> {
+        fn ser_size(&self) -> usize {
+            1 // type
+            + 1 // snr
+            + 1 // rssi
+            + 1 // path_len
+            + self.payload.len()
+        }
+
+        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
+            let mut out = SliceWriter::new(out);
+
+            out.write_u8(ResponseCodes::ControlData as u8);
+            out.write_i8(self.snr);
+            out.write_i8(self.rssi);
+            out.write_u8(self.path_len);
+            out.write_slice(&self.payload);
+
+            out.finish()
+        }
+    }
+
+    pub struct BinaryResponse<'a> {
+        pub data: Cow<'a, [u8]>
+    }
+
+    impl<'a> CompanionSer for BinaryResponse<'a> {
+        fn ser_size(&self) -> usize {
+            1 // type
+            + 1 // reserved
+            + self.data.len()
+        }
+    
+        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
+            let mut out = SliceWriter::new(out);
+            out.write_u8(ResponseCodes::BinaryResponse as u8);
+            out.write_u8(0); // reserved
+            out.write_slice(&self.data);
+            out.finish()
+        }
+    }
 }
 
 pub struct NullPaddedString<const SIZE: usize>(pub SmolStr);
@@ -763,6 +854,9 @@ pub enum ResponseCodes {
     Signature = 0x14,
     ExportPrivateKey = 0xe,
     CustomVars = 0x15,
+    TraceData = 0x89,
+    ControlData = 0x8E,
+    BinaryResponse = 0x8C
 }
 
 #[derive(FromRepr, Debug)]
@@ -807,7 +901,9 @@ pub enum HostCommandType {
     SetFloodScope = 54,
     GetCustomVars = 40,
     SetCustomVar = 41,
+    SendControlData = 55,
     GetStats = 56,
+    SendAnonReq = 57
 }
 
 #[derive(FromRepr)]
@@ -980,7 +1076,8 @@ pub async fn parse_packet(
         SendLogin => {
             let pk = packet.read_chunk::<32>()?;
             let password = packet;
-            handler.send_login(pk, password).await;
+            out.write_packet(&handler.send_login(pk, password).await)
+                .await;
         }
         SendStatusReq => todo!(),
         GetChannel => {
@@ -1003,12 +1100,15 @@ pub async fn parse_packet(
         SignFinish => {
             out.write_packet(&handler.sign_finish().await).await;
         }
-        SendTracePath => todo!(),
         SetOtherParams => {
             out.write_packet(&responses::Ok { code: None }).await;
         }
         SendTelemtryReq => todo!(),
-        SendBinaryReq => todo!(),
+        SendBinaryReq => {
+            let pub_key = packet.read_chunk::<32>()?;
+            let data = packet;
+            out.write_packet(&handler.send_binary_req(pub_key, data).await).await;
+        },
         SetFloodScope => {
             out.write_packet(&responses::Ok { code: None }).await;
         }
@@ -1020,6 +1120,28 @@ pub async fn parse_packet(
                 StatTypes::Radio => out.write_packet(&handler.get_radio_stats().await).await,
                 StatTypes::Packets => out.write_packet(&handler.get_packet_stats().await).await,
             }
+        }
+        SendControlData => {
+            out.write_packet(&handler.send_control_data(packet).await)
+                .await;
+        }
+        SendTracePath => {
+            // CMD(1) + tag(4) + auth_code(4) + flags(1) + [path]
+            let tag = packet.read_chunk::<4>()?;
+            let auth_code = packet.read_chunk::<4>()?;
+            let flags = packet.read_u8()?;
+            let path = Path::from_bytes(
+                PathHashMode::from_bytes(flags & 0x3)
+                    .map_err(|_| DecodeError::InvalidBitPattern)?,
+                packet,
+            );
+            out.write_packet(&handler.send_trace(*tag, *auth_code, flags, path).await)
+                .await;
+        }
+        SendAnonReq => {
+            let pubkey = packet.read_chunk::<32>()?;
+            let data = packet;
+            out.write_packet(&handler.send_anon_req(pubkey, data).await).await;
         }
     }
 
@@ -1171,4 +1293,21 @@ pub trait CompanionHandler {
     fn get_packet_stats(
         &mut self,
     ) -> impl Future<Output = CompanionProtoResult<responses::PacketStats>>;
+
+    fn send_control_data(
+        &mut self,
+        data: &[u8],
+    ) -> impl Future<Output = CompanionProtoResult<responses::Ok>>;
+
+    fn send_trace(
+        &mut self,
+        tag: [u8; 4],
+        auth_code: [u8; 4],
+        flags: u8,
+        path: Path<'_>,
+    ) -> impl Future<Output = CompanionProtoResult<responses::MsgSent>>;
+
+    fn send_binary_req(&mut self, pub_key: &[u8; 32], data: &[u8]) -> impl Future<Output = CompanionProtoResult<responses::MsgSent>>;
+
+    fn send_anon_req(&mut self, pub_key: &[u8; 32], data: &[u8]) -> impl Future<Output = CompanionProtoResult<responses::MsgSent>>;
 }

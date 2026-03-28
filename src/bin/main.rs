@@ -11,7 +11,7 @@ extern crate alloc;
 
 use alloc::sync::Arc;
 use chiyocore::companion_protocol::tcp::TcpCompanionSink;
-use chiyocore::companionv2::Companion;
+use chiyocore::companionv2::{Companion, CompanionConfig};
 use chiyocore::lora::LoraTaskChannel;
 use chiyocore::ping_bot::PingBot;
 use chiyocore::simple_mesh::SimpleMesh;
@@ -82,6 +82,8 @@ async fn main(spawner: Spawner) -> ! {
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
+    esp_alloc::psram_allocator!(peripherals.PSRAM, esp_hal::psram);
+
     let timg0 = TimerGroup::new(peripherals.TIMG0);
     let sw_int =
         esp_hal::interrupt::software::SoftwareInterruptControl::new(peripherals.SW_INTERRUPT);
@@ -127,6 +129,7 @@ async fn main(spawner: Spawner) -> ! {
             storage: Arc::clone(&flash),
             partition_offset: chiyocore::partition_table::LOGS.offset as usize,
         };
+    let fs = Arc::new(EspMutex::new(ActiveFilesystem::build(fs_part)));
 
     // let config: CompanionConfig = SimpleFileDb::new(Arc::clone(&fs))
     //     .get(littlefs2::path!("/companion/config"))
@@ -136,19 +139,22 @@ async fn main(spawner: Spawner) -> ! {
     //         wifi_ssid: String::from("your-wifi-here"),
     //         wifi_password: String::from("password-here"),
     //     });
+    let companion_cfg = CompanionConfig::load(&fs).await.unwrap();
+
     let net_stack = chiyocore::wifi::wifi_init(
         peripherals.WIFI,
         &spawner,
-        "".into(),
-        "".into(),
+        companion_cfg.wifi_ssid.into(),
+        companion_cfg.wifi_password.into(),
     )
     .await;
 
-    chiyocore::ntp::ntp(net_stack, &rtc).await;
+    spawner
+        .spawn(chiyocore::ntp::ntp_task(net_stack, Arc::clone(&rtc)))
+        .unwrap();
 
     let (tcp_tx, tcp_rx) = chiyocore::companion_protocol::tcp::TCP_COMPANION_CHANNEL.split();
 
-    let fs = Arc::new(EspMutex::new(ActiveFilesystem::build(fs_part)));
     let companion_db = SimpleFileDb::new(Arc::clone(&fs), littlefs2::path!("/companion/")).await;
     let identity = if let Some(id) = companion_db
         .get::<LocalIdentity>(c"identity")
@@ -194,6 +200,7 @@ async fn main(spawner: Spawner) -> ! {
         identity,
         mesh_storage.clone(),
         lora_app_channel.clone(),
+        &rtc
     )));
     let companion = Arc::new(EspMutex::new(
         Companion::new(

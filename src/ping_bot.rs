@@ -94,6 +94,60 @@ impl SimpleMeshLayer for PingBot {
     ) -> CompanionResult<()> {
         Ok(())
     }
+
+    async fn response<'f>(
+        &'f mut self,
+        _mesh: &'f crate::simple_mesh::SimpleMesh,
+        _packet: &'f meshcore::Packet<'_>,
+        _packet_status: lora_phy::mod_params::PacketStatus,
+        _contact: &'f crate::simple_mesh::storage::contact::CachedContact,
+        _response: &'f [u8],
+    ) -> CompanionResult<()> {
+        Ok(())
+    }
+
+    async fn request<'f>(
+        &'f mut self,
+        _mesh: &'f crate::simple_mesh::SimpleMesh,
+        _packet: &'f meshcore::Packet<'_>,
+        _packet_status: lora_phy::mod_params::PacketStatus,
+        _contact: &'f crate::simple_mesh::storage::contact::CachedContact,
+        _request: &'f meshcore::payloads::RequestPayload<'_>,
+    ) -> CompanionResult<()> {
+        Ok(())
+    }
+
+    async fn anonymous_request<'f>(
+        &'f mut self,
+        _mesh: &'f crate::simple_mesh::SimpleMesh,
+        _packet: &'f meshcore::Packet<'_>,
+        _packet_status: lora_phy::mod_params::PacketStatus,
+        _contact: &'f meshcore::identity::ForeignIdentity,
+        _data: &'f [u8],
+    ) -> CompanionResult<()> {
+        Ok(())
+    }
+
+    async fn trace_packet<'f>(
+        &'f mut self,
+        _mesh: &'f crate::simple_mesh::SimpleMesh,
+        _packet: &'f meshcore::Packet<'_>,
+        _packet_status: lora_phy::mod_params::PacketStatus,
+        _snrs: &'f [i8],
+        _trace: &'f meshcore::payloads::TracePacket<'_>,
+    ) -> CompanionResult<()> {
+        Ok(())
+    }
+
+    async fn control_packet<'f>(
+        &'f mut self,
+        _mesh: &'f crate::simple_mesh::SimpleMesh,
+        _packet: &'f meshcore::Packet<'_>,
+        _packet_status: lora_phy::mod_params::PacketStatus,
+        _payload: &'f meshcore::payloads::ControlPayload,
+    ) -> CompanionResult<()> {
+        Ok(())
+    }
 }
 
 // use esp_println::println;

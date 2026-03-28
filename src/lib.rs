@@ -1,4 +1,5 @@
 #![no_std]
+#![feature(allocator_api)]
 
 pub mod ntp;
 
@@ -9,6 +10,7 @@ pub mod crypto;
 pub mod lora;
 pub mod partition_table;
 pub mod ping_bot;
+pub mod psram_vec;
 pub mod simple_mesh;
 pub mod storage;
 pub mod wifi;

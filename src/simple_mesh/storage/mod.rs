@@ -3,6 +3,8 @@ use embassy_sync::rwlock::RwLock;
 
 pub mod channel;
 pub mod contact;
+pub mod shared_key_cache;
+
 use crate::{
     EspMutex,
     simple_mesh::storage::{channel::ChannelStorage, contact::ContactStorage},
