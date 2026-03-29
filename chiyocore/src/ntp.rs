@@ -8,7 +8,7 @@ use embassy_net::{
 use embassy_time::{Duration, Timer};
 use esp_hal::rtc_cntl::Rtc;
 // use esp_radio::wifi::{ClientConfig, ScanConfig, WifiController, WifiDevice, WifiEvent};
-use log::{info, trace};
+use log::trace;
 use sntpc::{NtpContext, NtpTimestampGenerator, get_time};
 use sntpc_net_embassy::UdpSocketWrapper;
 
@@ -110,7 +110,6 @@ pub async fn ntp_once(stack: embassy_net::Stack<'static>, rtc: &Rtc<'_>) {
     rtc.set_current_time_us(
         (result.sec() as u64 * USEC_IN_SEC) + ((result.sec_fraction() as u64 * USEC_IN_SEC) >> 32),
     );
-    trace!("NTP response");
 
-    info!("ntp sync'd to: {}", result.seconds);
+    trace!("ntp sync'd to: {}", result.seconds);
 }

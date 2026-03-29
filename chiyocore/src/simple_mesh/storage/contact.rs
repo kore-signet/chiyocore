@@ -1,11 +1,10 @@
 use alloc::{string::String, sync::Arc, vec::Vec};
 use base64::{Engine, prelude::BASE64_URL_SAFE};
-use meshcore::{Path, identity::ForeignIdentity, io::SliceWriter, payloads::AppdataFlags};
+use meshcore::{Path, identity::ForeignIdentity};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     EspMutex, FirmwareResult,
-    companion_protocol::protocol::{CompanionSer, NullPaddedSlice, ResponseCodes},
     storage::{ActiveFilesystem, FS_SIZE, SimpleFileDb},
 };
 
@@ -122,57 +121,5 @@ impl ContactStorage {
                 }
             }
         }
-    }
-}
-
-impl CompanionSer for Contact {
-    fn ser_size(&self) -> usize {
-        1 // packet_ty
-        + 32 // pk
-        + 1 // adv_ty
-        + 1 // flags
-        + 1 // path_to_len 
-        + 64 // path_to
-        + 32 // name
-        + 4 // last_heard
-        + 4 // latitude
-        + 4 // longitude
-        + 4 // last_mod 
-    }
-
-    fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-        let mut out = SliceWriter::new(out);
-
-        out.write_u8(ResponseCodes::Contact as u8);
-        out.write_slice(&self.key);
-        let flags = AppdataFlags::from_bits(self.flags).unwrap();
-        let adv_ty = if flags.contains(AppdataFlags::IS_CHAT_NODE) {
-            1
-        } else if flags.contains(AppdataFlags::IS_REPEATER) {
-            2
-        } else if flags.contains(AppdataFlags::IS_ROOM_SERVER) {
-            3
-        } else {
-            0
-        };
-
-        out.write_u8(adv_ty);
-        out.write_u8(flags.bits());
-        if let Some(path) = self.path_to.as_ref() {
-            out.write_u8(path.path_len_header().into_bytes()[0]);
-            NullPaddedSlice::<64>::from(path.raw_bytes()).encode_to(&mut out);
-        } else {
-            // flood
-            out.write_u8(0xFF);
-            NullPaddedSlice::<64>(&[]).encode_to(&mut out);
-        }
-
-        NullPaddedSlice::<32>::from(self.name.as_str()).encode_to(&mut out);
-        out.write_u32_le(self.last_heard);
-        out.write_u32_le(self.latitude);
-        out.write_u32_le(self.longitude);
-        out.write_u32_le(0);
-
-        out.finish()
     }
 }

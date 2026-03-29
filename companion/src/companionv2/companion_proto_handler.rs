@@ -1,336 +1,32 @@
-use alloc::{borrow::Cow, sync::Arc};
+use alloc::borrow::Cow;
 use ed25519_compact::Noise;
-use embassy_sync::rwlock::RwLock;
-use esp_hal::{rng::Trng, rtc_cntl::Rtc};
-use lora_phy::mod_params::PacketStatus;
+use esp_hal::rng::Trng;
 use meshcore::{
     Packet, PacketHeader, Path, PayloadType, RouteType, SerDeser,
     crypto::ChannelKeys,
-    identity::LocalIdentity,
     payloads::{
-        Ack, Advert, AdvertisementExtraData, AppdataFlags, RepeaterLogin, RequestPayload, ReturnedPath, TextHeader, TextMessageData, TextType, TracePacket
+        Advert, AdvertisementExtraData, AppdataFlags, RepeaterLogin, RequestPayload, TextHeader,
+        TextMessageData, TextType, TracePacket,
     },
-    repeater_protocol::LoginResponse,
 };
-use serde::{Deserialize, Serialize};
-use sha2::Digest;
-use smallvec::SmallVec;
-use smol_str::{SmolStr, ToSmolStr};
+use smol_str::ToSmolStr;
 
 use crate::{
-    CompanionResult, EspMutex, FirmwareResult,
-    companion_protocol::{
-        protocol::{
-            CompanionHandler, CompanionSink, NullPaddedSlice, NullPaddedString,
-            responses::{
-                self, ChannelInfo, CompanionProtoResult, DeviceInfo, GetMessageRes, MsgSent,
-                SelfInfo,
-            },
+    companion_protocol::protocol::{
+        CompanionHandler, CompanionSink, NullPaddedSlice, NullPaddedString,
+        responses::{
+            self, ChannelInfo, CompanionProtoResult, DeviceInfo, GetMessageRes, MsgSent, SelfInfo,
         },
-        tcp::TcpCompanionSink,
     },
-    companionv2::message_log::{MESSAGE_LOG_SIZE, MessageLog},
+    companionv2::{Companion, CompanionConfig},
+};
+use chiyocore::{
     lora::LORA_FREQUENCY_IN_HZ,
     simple_mesh::{
-        SimpleMesh, SimpleMeshLayer,
         packet_log::SavedMessage,
-        storage::{
-            MeshStorage,
-            channel::Channel,
-            contact::{CachedContact, Contact},
-        },
+        storage::{channel::Channel, contact::Contact},
     },
-    storage::{ActiveFilesystem, FS_SIZE, FsPartition, SimpleFileDb},
 };
-
-pub mod message_log;
-
-#[derive(Serialize, Deserialize)]
-pub struct CompanionConfig {
-    pub wifi_ssid: SmolStr,
-    pub wifi_password: SmolStr,
-    pub name: SmolStr,
-}
-
-impl CompanionConfig {
-    pub fn as_vars(&self) -> SmallVec<[(&str, &str); 8]> {
-        smallvec::smallvec![
-            ("wifi_ssid", self.wifi_ssid.as_str()),
-            ("wifi_password", self.wifi_password.as_str())
-        ]
-    }
-
-    pub fn set(&mut self, key: &str, val: &str) {
-        match key {
-            "wifi_ssid" => self.wifi_ssid = val.into(),
-            "wifi_password" => self.wifi_password = val.into(),
-            _ => {}
-        }
-    }
-
-    pub async fn load(fs: &Arc<EspMutex<ActiveFilesystem<FS_SIZE>>>) -> FirmwareResult<Self> {
-        SimpleFileDb::new(Arc::clone(fs), littlefs2::path!("/companion/"))
-            .await
-            .get(c"config")
-            .await
-            .transpose()
-            .unwrap_or_else(|| {
-                Ok(CompanionConfig {
-                    wifi_ssid: "".into(),
-                    wifi_password: "".into(),
-                    name: "".into(),
-                })
-            })
-    }
-}
-
-pub struct Companion {
-    config: CompanionConfig,
-    db: SimpleFileDb<FS_SIZE>,
-    identity: LocalIdentity,
-    storage: MeshStorage,
-    mesh: Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
-    companion_sink: TcpCompanionSink,
-    rtc: Arc<Rtc<'static>>,
-    message_log: MessageLog,
-    signature_in_progress: Option<ed25519_compact::SigningState>,
-    login_in_progress: Option<[u8; 32]>, // repeater id
-}
-
-impl Companion {
-    pub async fn new(
-        rtc: &Arc<Rtc<'static>>,
-        shared_storage: MeshStorage,
-        main_fs: &Arc<EspMutex<ActiveFilesystem<FS_SIZE>>>,
-        log_fs: FsPartition<MESSAGE_LOG_SIZE>,
-        mesh: &Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
-        companion_sink: TcpCompanionSink,
-    ) -> CompanionResult<Companion> {
-        let cfg_db = SimpleFileDb::new(Arc::clone(main_fs), littlefs2::path!("/companion/")).await;
-        let identity = mesh.read().await.identity.clone();
-        let cfg = cfg_db
-            .get(c"config")
-            .await?
-            .unwrap_or_else(|| CompanionConfig {
-                wifi_ssid: SmolStr::from(""),
-                wifi_password: SmolStr::from(""),
-                name: SmolStr::from(
-                    const_hex::const_encode::<6, false>(arrayref::array_ref![
-                        identity.pubkey(),
-                        0,
-                        6
-                    ])
-                    .as_str(),
-                ),
-            });
-
-        let msg_log = MessageLog::new(log_fs);
-
-        Ok(Companion {
-            config: cfg,
-            companion_sink,
-            identity,
-            storage: shared_storage,
-            mesh: Arc::clone(mesh),
-            rtc: Arc::clone(rtc),
-            db: cfg_db,
-            message_log: msg_log,
-            signature_in_progress: None,
-            login_in_progress: None,
-        })
-    }
-
-    async fn store_cfg(&self) -> FirmwareResult<()> {
-        self.db.insert(c"config", &self.config).await?;
-
-        Ok(())
-    }
-}
-
-impl SimpleMeshLayer for Companion {
-    async fn packet<'f>(
-        &'f mut self,
-        _mesh: &'f SimpleMesh,
-        _packet: &'f Packet<'_>,
-        packet_bytes: &'f [u8],
-        packet_status: PacketStatus,
-    ) -> CompanionResult<()> {
-        self.companion_sink
-            .write_packet(&responses::RfLogData::new(packet_status, packet_bytes))
-            .await;
-        Ok(())
-    }
-
-    async fn text_message<'f>(
-        &'f mut self,
-        _mesh: &'f SimpleMesh,
-        packet: &'f meshcore::Packet<'_>,
-        _packet_status: PacketStatus,
-        contact: &'f CachedContact,
-        message: &'f TextMessageData<'_>,
-    ) -> CompanionResult<()> {
-        let saved = SavedMessage::contact_msg(contact, packet, message);
-        self.companion_sink.write_packet(&saved).await;
-        self.message_log.push(&saved).await;
-
-        log::info!("DM [{:x}]: {}", contact.key[0], message.as_utf8()?);
-
-        Ok(())
-    }
-
-    async fn group_text<'f>(
-        &'f mut self,
-        _mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        _packet_status: PacketStatus,
-        channel: &'f Channel,
-        message: &'f TextMessageData<'_>,
-    ) -> CompanionResult<()> {
-        let saved = SavedMessage::channel_msg(channel, packet, message);
-        self.companion_sink.write_packet(&saved).await;
-        self.message_log.push(&saved).await;
-
-        log::info!("group-text [{}]: {}", channel.name, message.as_utf8()?);
-
-        Ok(())
-    }
-
-    async fn ack<'f>(
-        &'f mut self,
-        _mesh: &'f SimpleMesh,
-        _packet: &'f Packet<'_>,
-        _packet_status: PacketStatus,
-        ack: &'f Ack,
-    ) -> CompanionResult<()> {
-        self.companion_sink
-            .write_packet(&responses::Ack { code: ack.crc })
-            .await;
-        Ok(())
-    }
-
-    async fn advert<'f>(
-        &'f mut self,
-        _mesh: &'f SimpleMesh,
-        _packet: &'f Packet<'_>,
-        _packet_status: PacketStatus,
-        _advert: &'f Advert<'_>,
-    ) -> CompanionResult<()> {
-        Ok(())
-    }
-
-    async fn returned_path<'f>(
-        &'f mut self,
-        _mesh: &'f SimpleMesh,
-        _packet: &'f Packet<'_>,
-        _packet_status: PacketStatus,
-        _contact: &'f CachedContact,
-        _path: &'f ReturnedPath<'_>,
-    ) -> CompanionResult<()> {
-        Ok(())
-    }
-
-    async fn response<'f>(
-        &'f mut self,
-        _mesh: &'f SimpleMesh,
-        _packet: &'f Packet<'_>,
-        _packet_status: PacketStatus,
-        contact: &'f CachedContact,
-        response: &'f [u8],
-    ) -> CompanionResult<()> {
-        if let Some(rptr_key) = self.login_in_progress.take_if(|v| *v == contact.key) {
-            // response is a login resp
-            let Ok(res) = LoginResponse::decode(response) else {
-                log::error!("failed to decode login response");
-                return Ok(());
-            };
-            log::info!("response: {:?}", res);
-
-            if res.response_code == 0 {
-                // LOGIN_SUCCESS
-                self.companion_sink
-                    .write_packet(&responses::LoginSuccess {
-                        permissions: res.permissions,
-                        prefix: *arrayref::array_ref![rptr_key, 0, 6],
-                    })
-                    .await;
-            }
-        } else {
-            self.companion_sink.write_packet(&responses::BinaryResponse {
-                data: response.into()
-            }).await;
-        }
-
-        Ok(())
-    }
-
-    async fn request<'f>(
-        &'f mut self,
-        _mesh: &'f SimpleMesh,
-        _packet: &'f Packet<'_>,
-        _packet_status: PacketStatus,
-        _contact: &'f CachedContact,
-        _request: &'f meshcore::payloads::RequestPayload<'_>,
-    ) -> CompanionResult<()> {
-        Ok(())
-    }
-
-    async fn anonymous_request<'f>(
-        &'f mut self,
-        _mesh: &'f SimpleMesh,
-        _packet: &'f Packet<'_>,
-        _packet_status: PacketStatus,
-        _contact: &'f meshcore::identity::ForeignIdentity,
-        _data: &'f [u8],
-    ) -> CompanionResult<()> {
-        Ok(())
-    }
-
-    async fn trace_packet<'f>(
-        &'f mut self,
-        _mesh: &'f SimpleMesh,
-        _packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        snrs: &'f [i8],
-        trace: &'f meshcore::payloads::TracePacket<'_>,
-    ) -> CompanionResult<()> {
-        if snrs.len() < trace.path.len() {
-            return Ok(());
-        }
-
-        self.companion_sink
-            .write_packet(&responses::TraceData {
-                reserved: 0,
-                flags: trace.flags,
-                tag: trace.tag,
-                auth_code: trace.auth_code,
-                path: trace.path.clone(),
-                snrs: snrs.into(),
-                last_snr: packet_status.snr as i8 * 4,
-            })
-            .await;
-
-        Ok(())
-    }
-
-    async fn control_packet<'f>(
-        &'f mut self,
-        _mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        _payload: &'f meshcore::payloads::ControlPayload,
-    ) -> CompanionResult<()> {
-        self.companion_sink
-            .write_packet(&responses::ControlData {
-                snr: (packet_status.snr * 4) as i8,
-                rssi: packet_status.rssi as i8,
-                path_len: packet.path.len() as u8,
-                payload: (&packet.payload[..]).into(),
-            })
-            .await;
-
-        Ok(())
-    }
-}
 
 impl CompanionHandler for Companion {
     fn start_req(&mut self) {}
@@ -356,7 +52,7 @@ impl CompanionHandler for Companion {
             radio_bandwidth: 62_500,
             radio_sf: 7,
             radio_cr: 5,
-            device_name: &self.config.name,
+            device_name: &self.companion_config.name,
         })
     }
 
@@ -424,7 +120,7 @@ impl CompanionHandler for Companion {
             return Err(responses::Err { code: None });
         };
 
-        let msg = heapless::format!(152; "{}: {}", self.config.name, txt).unwrap();
+        let msg = heapless::format!(152; "{}: {}", self.companion_config.name, txt).unwrap();
 
         let text = TextMessageData::plaintext(timestamp, msg.as_bytes());
         let timeout = self
@@ -488,7 +184,7 @@ impl CompanionHandler for Companion {
             longitude: None,
             feature_1: None,
             feature_2: None,
-            name: Some(self.config.name.as_bytes().into()),
+            name: Some(self.companion_config.name.as_bytes().into()),
         };
 
         let random_bytes = rand::Rng::random(&mut Trng::try_new().unwrap());
@@ -510,8 +206,9 @@ impl CompanionHandler for Companion {
     }
 
     async fn set_advert_name(&mut self, name: &str) -> CompanionProtoResult<responses::Ok> {
-        self.config.name = name.to_smolstr();
-        self.store_cfg().await?;
+        self.companion_config
+            .set(CompanionConfig { name: name.into() })
+            .await?;
         Ok(responses::Ok { code: None })
     }
 
@@ -564,9 +261,9 @@ impl CompanionHandler for Companion {
     async fn sync_next_message<'a>(
         &'a mut self,
     ) -> CompanionProtoResult<responses::GetMessageRes<'a>> {
-        Ok(match self.message_log.pop().await {
-            Some(SavedMessage::Channel(v)) => GetMessageRes::Channel(v),
-            Some(SavedMessage::Contact(v)) => GetMessageRes::Contact(v),
+        Ok(match self.message_log.lock().await.pop().await {
+            Some(SavedMessage::Channel(v)) => GetMessageRes::Channel(v.clone_with_data()),
+            Some(SavedMessage::Contact(v)) => GetMessageRes::Contact(v.clone_with_data()),
             None => GetMessageRes::NoMoreMessages,
         })
     }
@@ -590,7 +287,12 @@ impl CompanionHandler for Companion {
 
         self.login_in_progress = Some(*pk);
 
-        let msg_timeout = self.mesh.read().await.send_anon_req::<RepeaterLogin>(&contact.as_identity(), contact.path.clone(), &login).await?;
+        let msg_timeout = self
+            .mesh
+            .read()
+            .await
+            .send_anon_req::<RepeaterLogin>(&contact.as_identity(), contact.path.clone(), &login)
+            .await?;
 
         Ok(responses::MsgSent {
             is_flood: contact.path.is_none(),
@@ -654,7 +356,12 @@ impl CompanionHandler for Companion {
     }
 
     async fn get_custom_vars<'s>(&'s mut self) -> CompanionProtoResult<responses::CustomVars<'s>> {
-        Ok(responses::CustomVars(self.config.as_vars()))
+        Ok(responses::CustomVars(
+            self.global_config
+                .iter()
+                .map(|(k, v)| (k.as_str(), v.as_str()))
+                .collect(),
+        ))
     }
 
     async fn set_custom_var(
@@ -662,21 +369,43 @@ impl CompanionHandler for Companion {
         key: &str,
         val: &str,
     ) -> CompanionProtoResult<responses::Ok> {
-        self.config.set(key, val);
-        self.store_cfg().await?;
+        self.global_config
+            .with_mut(|cfg| {
+                cfg.insert(key.into(), val.into());
+            })
+            .await?;
         Ok(responses::Ok { code: None })
     }
 
     async fn get_core_stats(&mut self) -> CompanionProtoResult<responses::CoreStats> {
-        Err(responses::Err { code: None })
+        Ok(responses::CoreStats {
+            battery_mv: 0,
+            uptime_secs: self.rtc.time_since_power_up().as_secs() as u32,
+            errors: 0,
+            queue_len: 0,
+        })
     }
 
     async fn get_radio_stats(&mut self) -> CompanionProtoResult<responses::RadioStats> {
-        Err(responses::Err { code: None })
+        Ok(responses::RadioStats {
+            noise_floor: 0,
+            last_rssi: 0,
+            last_snr: 0,
+            tx_air_secs: 0,
+            rx_air_secs: 0,
+        })
     }
 
     async fn get_packet_stats(&mut self) -> CompanionProtoResult<responses::PacketStats> {
-        Err(responses::Err { code: None })
+        Ok(responses::PacketStats {
+            recv: 0,
+            sent: 0,
+            flood_tx: 0,
+            direct_tx: 0,
+            flood_rx: 0,
+            direct_rx: 0,
+            recv_errors: 0,
+        })
     }
 
     async fn send_control_data(&mut self, data: &[u8]) -> CompanionProtoResult<responses::Ok> {
@@ -730,33 +459,59 @@ impl CompanionHandler for Companion {
         })
     }
 
-    async fn send_binary_req(&mut self, pub_key: &[u8; 32], data: &[u8]) -> CompanionProtoResult<responses::MsgSent> {
+    async fn send_binary_req(
+        &mut self,
+        pub_key: &[u8; 32],
+        data: &[u8],
+    ) -> CompanionProtoResult<responses::MsgSent> {
         let contacts = self.storage.contacts.read().await;
-        let contact = contacts.fast_get(pub_key).ok_or(responses::Err { code: None })?;
+        let contact = contacts
+            .fast_get(pub_key)
+            .ok_or(responses::Err { code: None })?;
 
         let time = (self.rtc.current_time_us() / 1_000_000) as u32;
-        let timeout = self.mesh.read().await.send_to_contact::<RequestPayload>(&contact.as_identity(), contact.path.clone(), &RequestPayload {
-            time,
-            data: data.into(),
-        }).await?;
+        let timeout = self
+            .mesh
+            .read()
+            .await
+            .send_to_contact::<RequestPayload>(
+                &contact.as_identity(),
+                contact.path.clone(),
+                &RequestPayload {
+                    time,
+                    data: data.into(),
+                },
+            )
+            .await?;
 
         Ok(responses::MsgSent {
             is_flood: contact.path.is_some(),
             expected_ack: time.to_le_bytes(),
-            suggested_timeout: timeout.as_millis() as u32
+            suggested_timeout: timeout.as_millis() as u32,
         })
     }
 
-    async fn send_anon_req(&mut self, pub_key: &[u8; 32], data: &[u8]) -> CompanionProtoResult<responses::MsgSent> {
+    async fn send_anon_req(
+        &mut self,
+        pub_key: &[u8; 32],
+        data: &[u8],
+    ) -> CompanionProtoResult<responses::MsgSent> {
         let contacts = self.storage.contacts.read().await;
-        let contact = contacts.fast_get(pub_key).ok_or(responses::Err { code: None })?;
+        let contact = contacts
+            .fast_get(pub_key)
+            .ok_or(responses::Err { code: None })?;
 
         let req = RequestPayload {
             time: (self.rtc.current_time_us() / 1_000_000) as u32,
-            data: data.into()
+            data: data.into(),
         };
 
-        let msg_timeout = self.mesh.read().await.send_anon_req::<RequestPayload>(&contact.as_identity(), contact.path.clone(), &req).await?;
+        let msg_timeout = self
+            .mesh
+            .read()
+            .await
+            .send_anon_req::<RequestPayload>(&contact.as_identity(), contact.path.clone(), &req)
+            .await?;
         Ok(responses::MsgSent {
             is_flood: contact.path.is_none(),
             expected_ack: req.time.to_le_bytes(),

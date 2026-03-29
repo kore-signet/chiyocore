@@ -2,7 +2,9 @@ use alloc::{format, sync::Arc};
 use esp_hal::rtc_cntl::Rtc;
 use meshcore::payloads::TextMessageData;
 
-use crate::{CompanionResult, simple_mesh::SimpleMeshLayer};
+use crate::{
+    CompanionResult, EspMutex, builder::BuildChiyocoreLayer, simple_mesh::SimpleMeshLayer,
+};
 
 pub struct PingBot {
     pub rtc: Arc<Rtc<'static>>,
@@ -147,6 +149,22 @@ impl SimpleMeshLayer for PingBot {
         _payload: &'f meshcore::payloads::ControlPayload,
     ) -> CompanionResult<()> {
         Ok(())
+    }
+}
+
+impl BuildChiyocoreLayer for PingBot {
+    type Output = Arc<EspMutex<PingBot>>;
+
+    fn build<T: 'static>(
+        _spawner: &embassy_executor::Spawner,
+        chiyocore: &crate::builder::Chiyocore<T, crate::builder::ChiyocoreSetupData>,
+        _mesh: &Arc<
+            embassy_sync::rwlock::RwLock<esp_sync::RawMutex, crate::simple_mesh::SimpleMesh>,
+        >,
+    ) -> impl Future<Output = Self::Output> {
+        core::future::ready(Arc::new(EspMutex::new(PingBot {
+            rtc: Arc::clone(chiyocore.rtc()),
+        })))
     }
 }
 

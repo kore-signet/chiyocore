@@ -213,6 +213,57 @@ dependencies = [
  "embedded-io-async 0.7.0",
  "embedded-storage",
  "esp-alloc",
+ "esp-hal",
+ "esp-println",
+ "esp-radio",
+ "esp-rtos",
+ "esp-storage",
+ "esp-sync",
+ "futures-util",
+ "heapless 0.9.2",
+ "hmac",
+ "itoa",
+ "litemap",
+ "littlefs2",
+ "log",
+ "lora-phy",
+ "memchr",
+ "meshcore",
+ "modular-bitfield",
+ "ouroboros",
+ "postcard",
+ "rand",
+ "sequential-storage",
+ "serde",
+ "sha2",
+ "smol_str",
+ "sntpc",
+ "sntpc-net-embassy",
+ "static_cell",
+ "strum 0.28.0",
+ "thingbuf",
+]
+
+[[package]]
+name = "chiyocore-companion"
+version = "0.1.0"
+dependencies = [
+ "arrayref",
+ "base64 0.22.1",
+ "bumpalo",
+ "chiyocore",
+ "const-hex",
+ "critical-section",
+ "ed25519-compact",
+ "embassy-embedded-hal",
+ "embassy-executor",
+ "embassy-futures",
+ "embassy-net",
+ "embassy-sync 0.7.2",
+ "embassy-time",
+ "embedded-io-async 0.7.0",
+ "embedded-storage",
+ "esp-alloc",
  "esp-backtrace",
  "esp-bootloader-esp-idf",
  "esp-hal",
@@ -245,6 +296,64 @@ dependencies = [
  "static_cell",
  "strum 0.28.0",
  "thingbuf",
+]
+
+[[package]]
+name = "chiyocore-firmware"
+version = "0.1.0"
+dependencies = [
+ "arrayref",
+ "base64 0.22.1",
+ "bumpalo",
+ "chiyocore",
+ "chiyocore-companion",
+ "const-hex",
+ "critical-section",
+ "ed25519-compact",
+ "embassy-embedded-hal",
+ "embassy-executor",
+ "embassy-futures",
+ "embassy-net",
+ "embassy-sync 0.7.2",
+ "embassy-time",
+ "embedded-io-async 0.7.0",
+ "embedded-storage",
+ "esp-alloc",
+ "esp-backtrace",
+ "esp-bootloader-esp-idf",
+ "esp-hal",
+ "esp-println",
+ "esp-radio",
+ "esp-rtos",
+ "esp-storage",
+ "esp-sync",
+ "futures-util",
+ "genco",
+ "heapless 0.9.2",
+ "hmac",
+ "itoa",
+ "litemap",
+ "littlefs2",
+ "log",
+ "lora-phy",
+ "memchr",
+ "meshcore",
+ "modular-bitfield",
+ "ouroboros",
+ "postcard",
+ "project-root",
+ "rand",
+ "sequential-storage",
+ "serde",
+ "sha2",
+ "smallvec",
+ "smol_str",
+ "sntpc",
+ "sntpc-net-embassy",
+ "static_cell",
+ "strum 0.28.0",
+ "thingbuf",
+ "toml",
 ]
 
 [[package]]
@@ -1300,6 +1409,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1d758ba1b47b00caf47f24925c0074ecb20d6dfcffe7f6d53395c0465674841a"
 
 [[package]]
+name = "genco"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77ab846431e5d637791b3279e7242fe2b21e11c3d8b4cf6a99f645c5f16ba7c0"
+dependencies = [
+ "genco-macros",
+ "relative-path",
+ "smallvec",
+]
+
+[[package]]
+name = "genco-macros"
+version = "0.19.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c42a1fe5a699c7f1d36ea6e04ed680a5c787cabff4b610ae3b8954ea3bcefec1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+]
+
+[[package]]
 name = "generic-array"
 version = "0.14.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1521,6 +1652,9 @@ name = "litemap"
 version = "0.8.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6373607a59f0be73a39b6fe456b8192fcc3585f602af20751600e974dd455e77"
+dependencies = [
+ "serde_core",
+]
 
 [[package]]
 name = "litrs"
@@ -1607,7 +1741,7 @@ checksum = "f8ca58f447f06ed17d5fc4043ce1b10dd205e060fb3ce5b979b8ed8e59ff3f79"
 [[package]]
 name = "meshcore"
 version = "0.1.0"
-source = "git+https://github.com/kore-signet/meshcore.git#f57c67afe34694bc16fe718317550d429d1f74d2"
+source = "git+https://github.com/kore-signet/meshcore.git#e22702401b598a3c773c1a5173d531913f0e5bef"
 dependencies = [
  "aes",
  "arrayref",
@@ -1886,6 +2020,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "project-root"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8bccbff07d5ed689c4087d20d7307a52ab6141edeedf487c3876a55b86cf63df"
+
+[[package]]
 name = "proptest"
 version = "1.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1982,6 +2122,12 @@ name = "regex-syntax"
 version = "0.8.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "dc897dd8d9e8bd1ed8cdad82b5966c3e0ecae09fb1907d58efaa013543185d0a"
+
+[[package]]
+name = "relative-path"
+version = "1.9.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba39f3699c378cd8970968dcbff9c43159ea4cfbd88d43c00b22f2ef10a435d2"
 
 [[package]]
 name = "riscv"
@@ -2149,6 +2295,15 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.117",
+]
+
+[[package]]
+name = "serde_spanned"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "876ac351060d4f882bb1032b6369eb0aef79ad9df1ea8bc404874d8cc3d0cd98"
+dependencies = [
+ "serde_core",
 ]
 
 [[package]]
@@ -2415,10 +2570,25 @@ dependencies = [
 ]
 
 [[package]]
-name = "toml_datetime"
-version = "1.0.1+spec-1.1.0"
+name = "toml"
+version = "1.1.0+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9b320e741db58cac564e26c607d3cc1fdc4a88fd36c879568c07856ed83ff3e9"
+checksum = "f8195ca05e4eb728f4ba94f3e3291661320af739c4e43779cbdfae82ab239fcc"
+dependencies = [
+ "indexmap",
+ "serde_core",
+ "serde_spanned",
+ "toml_datetime",
+ "toml_parser",
+ "toml_writer",
+ "winnow",
+]
+
+[[package]]
+name = "toml_datetime"
+version = "1.1.0+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "97251a7c317e03ad83774a8752a7e81fb6067740609f75ea2b585b569a59198f"
 dependencies = [
  "serde_core",
 ]
@@ -2437,12 +2607,18 @@ dependencies = [
 
 [[package]]
 name = "toml_parser"
-version = "1.0.10+spec-1.1.0"
+version = "1.1.0+spec-1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7df25b4befd31c4816df190124375d5a20c6b6921e2cad937316de3fccd63420"
+checksum = "2334f11ee363607eb04df9b8fc8a13ca1715a72ba8662a26ac285c98aabb4011"
 dependencies = [
  "winnow",
 ]
+
+[[package]]
+name = "toml_writer"
+version = "1.1.0+spec-1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d282ade6016312faf3e41e57ebbba0c073e4056dab1232ab1cb624199648f8ed"
 
 [[package]]
 name = "typenum"

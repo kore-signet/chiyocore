@@ -4,15 +4,14 @@ use embassy_time::Duration;
 use embedded_io_async::Write;
 use meshcore::io::TinyReadExt;
 use smallvec::SmallVec;
-use thingbuf::mpsc::StaticChannel;
-use thingbuf::recycling::DefaultRecycle;
 
 use crate::companion_protocol::protocol::{CompanionSer, CompanionSink};
 use crate::companionv2::Companion;
 // use crate::ping_bot::PingBot;
-use crate::{EspMutex, companion_protocol};
+use crate::companion_protocol;
+use chiyocore::EspMutex;
 
-pub static TCP_COMPANION_CHANNEL: StaticChannel<SmallVec<[u8; 256]>, 2> = StaticChannel::new();
+// pub static TCP_COMPANION_CHANNEL: StaticChannel<SmallVec<[u8; 256]>, 2> = StaticChannel::new();
 
 struct TcpFrameSink<'a, 'b> {
     tx: &'a mut TcpSocket<'b>,
@@ -34,42 +33,12 @@ impl<'a, 'b> CompanionSink for TcpFrameSink<'a, 'b> {
     }
 }
 
-#[derive(Clone)]
-pub struct TcpCompanionSink {
-    tx: thingbuf::mpsc::StaticSender<SmallVec<[u8; 256]>, DefaultRecycle>,
-    // scratch: Vec<u8>,
-}
-
-impl TcpCompanionSink {
-    pub fn new(tx: thingbuf::mpsc::StaticSender<SmallVec<[u8; 256]>, DefaultRecycle>) -> Self {
-        TcpCompanionSink {
-            tx,
-            // scratch: Vec::with_capacity(32),
-        }
-    }
-}
-
-impl CompanionSink for TcpCompanionSink {
-    async fn write_packet(&mut self, packet: &impl CompanionSer) {
-        let Ok(mut slot) = self.tx.try_send_ref() else {
-            return;
-        };
-
-        let size = packet.ser_size();
-        slot.push(b'\x3e');
-        slot.extend_from_slice(&(size as u16).to_le_bytes());
-        slot.resize(size + 3, 0);
-        packet.companion_serialize(&mut slot[3..]);
-        // slot.extend_from_slice(data);
-        drop(slot);
-    }
-}
-
-#[embassy_executor::task]
+#[embassy_executor::task(pool_size = 4)]
 pub async fn tcp_companion(
     stack: embassy_net::Stack<'static>,
-    packet_rx: thingbuf::mpsc::StaticReceiver<SmallVec<[u8; 256]>, DefaultRecycle>,
+    packet_rx: thingbuf::mpsc::Receiver<SmallVec<[u8; 256]>>,
     handler: Arc<EspMutex<Companion>>,
+    port: u16,
 ) {
     let mut tcp_rx_buf = [0u8; 4096];
     let mut tcp_tx_buf = [0u8; 4096];
@@ -84,7 +53,7 @@ pub async fn tcp_companion(
 
     loop {
         log::info!("connecting as companion...");
-        tcp.accept(5000).await.unwrap();
+        tcp.accept(port).await.unwrap();
         log::info!("companion connected!");
 
         'recv_loop: loop {

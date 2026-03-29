@@ -1,8 +1,10 @@
-use core::time::Duration;
+use core::{ops::DerefMut, time::Duration};
 
 use alloc::{borrow::Cow, string::String, sync::Arc, vec::Vec};
 use arrayref::array_ref;
+use embassy_sync::rwlock::RwLock;
 use esp_hal::rtc_cntl::Rtc;
+use futures_util::FutureExt;
 use lora_phy::mod_params::PacketStatus;
 use meshcore::{
     Packet, PacketHeader, PacketPayload, Path, PathHashMode, PayloadType, RouteType, SerDeser,
@@ -16,8 +18,7 @@ use meshcore::{
 };
 
 use crate::{
-    BumpaloVec, CompanionError, CompanionResult, MeshcoreHandler,
-    companion_protocol::protocol::responses::MsgSent,
+    BumpaloVec, CompanionError, CompanionResult, EspMutex, MeshcoreHandler,
     crypto::{HardwareAES, HardwareHMAC, HardwareSHA},
     lora::LoraTaskChannel,
     simple_mesh::{
@@ -33,6 +34,12 @@ use crate::{
 
 pub mod packet_log;
 pub mod storage;
+
+pub struct MsgSent {
+    pub is_flood: bool,
+    pub expected_ack: [u8; 4],
+    pub suggested_timeout: u32,
+}
 
 pub struct SimpleMesh {
     pub identity: LocalIdentity,
@@ -51,7 +58,7 @@ impl SimpleMesh {
         identity: LocalIdentity,
         storage: MeshStorage,
         lora_tx: LoraTaskChannel,
-        rtc: &Arc<Rtc<'static>>
+        rtc: &Arc<Rtc<'static>>,
     ) -> SimpleMesh {
         SimpleMesh {
             key_cache: SharedKeyCache::new(&identity),
@@ -130,15 +137,16 @@ impl SimpleMesh {
         Ok(timeout)
     }
 
-    pub async fn send_anon_req<P: SerDeser + Encryptable>(&self, contact: &ForeignIdentity, path: Option<meshcore::Path<'_>>, message: &P::Representation<'_>) -> CompanionResult<Duration> {
+    pub async fn send_anon_req<P: SerDeser + Encryptable>(
+        &self,
+        contact: &ForeignIdentity,
+        path: Option<meshcore::Path<'_>>,
+        message: &P::Representation<'_>,
+    ) -> CompanionResult<Duration> {
         let mut scratch = BumpaloVec::new_in(&self.scratch);
         let anon_req = self
             .identity
-            .make_anon_req::<P, HardwareAES>(
-                message,
-                contact,
-                &mut scratch,
-            )
+            .make_anon_req::<P, HardwareAES>(message, contact, &mut scratch)
             .await
             .unwrap();
         let anon_req_bytes = AnonymousRequest::encode_to_vec(&anon_req).unwrap();
@@ -152,8 +160,7 @@ impl SimpleMesh {
                     meshcore::RouteType::Flood
                 }),
             transport_codes: None,
-            path: path
-                .unwrap_or(Path::empty(self.path_hash_mode)),
+            path: path.unwrap_or(Path::empty(self.path_hash_mode)),
             payload: anon_req_bytes.into(),
         };
 
@@ -779,7 +786,9 @@ impl SimpleMesh {
         message: ControlPayload,
         layers: &mut impl SimpleMeshLayer,
     ) -> CompanionResult<()> {
-        layers.control_packet(self, packet, packet_status, &message).await;
+        layers
+            .control_packet(self, packet, packet_status, &message)
+            .await;
         Ok(())
     }
 
@@ -953,8 +962,190 @@ impl MeshcoreHandler for SimpleMesh {
 
 /* da tuple zone */
 
+impl<A> SimpleMeshLayer for &mut A
+where
+    A: SimpleMeshLayer,
+{
+    fn packet<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_bytes: &'f [u8],
+        packet_status: PacketStatus,
+    ) -> impl Future<Output = CompanionResult<()>> {
+        A::packet(self, mesh, packet, packet_bytes, packet_status)
+    }
+
+    fn text_message<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        contact: &'f CachedContact,
+        message: &'f TextMessageData<'_>,
+    ) -> impl Future<Output = CompanionResult<()>> {
+        A::text_message(self, mesh, packet, packet_status, contact, message)
+    }
+
+    fn group_text<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        channel: &'f Channel,
+        message: &'f TextMessageData<'_>,
+    ) -> impl Future<Output = CompanionResult<()>> {
+        A::group_text(self, mesh, packet, packet_status, channel, message)
+    }
+
+    fn ack<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        ack: &'f Ack,
+    ) -> impl Future<Output = CompanionResult<()>> {
+        A::ack(self, mesh, packet, packet_status, ack)
+    }
+
+    fn advert<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        advert: &'f Advert<'_>,
+    ) -> impl Future<Output = CompanionResult<()>> {
+        A::advert(self, mesh, packet, packet_status, advert)
+    }
+
+    fn returned_path<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        contact: &'f CachedContact,
+        path: &'f ReturnedPath<'_>,
+    ) -> impl Future<Output = CompanionResult<()>> {
+        A::returned_path(self, mesh, packet, packet_status, contact, path)
+    }
+
+    fn response<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        contact: &'f CachedContact,
+        response: &'f [u8],
+    ) -> impl Future<Output = CompanionResult<()>> {
+        A::response(self, mesh, packet, packet_status, contact, response)
+    }
+
+    fn request<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        contact: &'f CachedContact,
+        request: &'f RequestPayload<'_>,
+    ) -> impl Future<Output = CompanionResult<()>> {
+        A::request(self, mesh, packet, packet_status, contact, request)
+    }
+
+    fn anonymous_request<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        contact: &'f ForeignIdentity,
+        data: &'f [u8],
+    ) -> impl Future<Output = CompanionResult<()>> {
+        A::anonymous_request(self, mesh, packet, packet_status, contact, data)
+    }
+
+    fn trace_packet<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        snrs: &'f [i8],
+        trace: &'f TracePacket<'_>,
+    ) -> impl Future<Output = CompanionResult<()>> {
+        A::trace_packet(self, mesh, packet, packet_status, snrs, trace)
+    }
+
+    fn control_packet<'f>(
+        &'f mut self,
+        mesh: &'f SimpleMesh,
+        packet: &'f Packet<'_>,
+        packet_status: PacketStatus,
+        payload: &'f ControlPayload,
+    ) -> impl Future<Output = CompanionResult<()>> {
+        A::control_packet(self, mesh, packet, packet_status, payload)
+    }
+}
+
+pub trait WithLayer {
+    fn call_me(&self, layer: impl SimpleMeshLayer) -> impl Future<Output = ()>;
+}
+
+pub trait MeshLayerGet: Send {
+    type Layer<'a>: SimpleMeshLayer + Send;
+
+    fn with_layer(&self, f: impl WithLayer) -> impl Future<Output = ()>;
+}
+
+impl<L: SimpleMeshLayer + Send + 'static> MeshLayerGet for Arc<RwLock<esp_sync::RawMutex, L>> {
+    type Layer<'a> = &'a mut L;
+
+    fn with_layer(&self, f: impl WithLayer) -> impl Future<Output = ()> {
+        self.write()
+            .then(|mut v| async move { f.call_me(&mut *v).await })
+    }
+}
+
+impl<L: SimpleMeshLayer + Send + 'static> MeshLayerGet for Arc<EspMutex<L>> {
+    type Layer<'a> = &'a mut L;
+
+    fn with_layer(&self, f: impl WithLayer) -> impl Future<Output = ()> {
+        self.lock()
+            .then(|mut v| async move { f.call_me(&mut *v).await })
+    }
+}
+
 macro_rules! impl_mesh_layer_tuple {
     ($join:path; $($var:ident),*) => {
+        #[allow(non_snake_case)]
+        impl <$($var),*> MeshLayerGet for ($(Arc<RwLock<esp_sync::RawMutex, $var>>),*) where $($var: SimpleMeshLayer + Send + 'static),* {
+            type Layer<'a> = ($(&'a mut $var),*);
+
+                async fn with_layer(&self, f: impl WithLayer) {
+                    let ($($var),*) = self;
+                    let ($(mut $var),*) = $join(
+                        $(
+                           $var.write()
+                        ),*
+                    ).await;
+
+                    f.call_me(($($var.deref_mut()),*)).await;
+                }
+        }
+
+        #[allow(non_snake_case)]
+        impl <$($var),*> MeshLayerGet for ($(Arc<EspMutex<$var>>),*) where $($var: SimpleMeshLayer + Send + 'static),* {
+            type Layer<'a> = ($(&'a mut $var),*);
+
+                async fn with_layer(&self, f: impl WithLayer) {
+                    let ($($var),*) = self;
+                    let ($(mut $var),*) = $join(
+                        $(
+                           $var.lock()
+                        ),*
+                    ).await;
+
+                    f.call_me(($($var.deref_mut()),*)).await;
+                }
+        }
+
         #[allow(non_snake_case)]
         impl <$($var),*> SimpleMeshLayer for ($(&mut $var),*) where $($var: SimpleMeshLayer),* {
                 async fn packet<'f>(
@@ -1193,3 +1384,31 @@ impl_mesh_layer_tuple!(
     embassy_futures::join::join5;
     A,B,C,D,F
 );
+
+// async fn test_layer<A: SimpleMeshLayer, B: SimpleMeshLayer>(
+//     (A, B): &(Arc<RwLock<esp_sync::RawMutex, A>>, Arc<RwLock<esp_sync::RawMutex, B>>),
+//     with_fn: impl AsyncFnOnce((&mut A, &mut B))
+// ) {
+//     let (mut A, mut B) = embassy_futures::join::join(A.write(), B.write()).await;
+//     with_fn((A.deref_mut(), B.deref_mut())).await;
+
+//     todo!()
+// }
+
+// #[allow(non_snake_case)]
+// impl<A, B> MeshLayerGet
+//     for (
+//         Arc<RwLock<esp_sync::RawMutex, A>>,
+//         Arc<RwLock<esp_sync::RawMutex, B>>,
+//     )
+// where
+//     A: SimpleMeshLayer + Send + 'static,
+//     B: SimpleMeshLayer + Send + 'static,
+// {
+//     type Layer<'a> = (&'a mut A, &'a mut B);
+//     async fn with_layer(&self, f: impl AsyncFnOnce(Self::Layer<'_>)) {
+//         let (A, B) = self;
+//         let (mut A, mut B) = embassy_futures::join::join(A.write(), B.write()).await;
+//         f((A.deref_mut(), B.deref_mut())).await;
+//     }
+// }

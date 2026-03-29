@@ -10,6 +10,10 @@
 // spi = "SPI2"
 // //
 
+// pub struct LoraPins {
+
+// }
+
 #[macro_export]
 macro_rules! board_def {
     ($peripherals:ident, {
@@ -23,7 +27,7 @@ macro_rules! board_def {
         rx_en = $rx_en:ident;
         spi = $spi:ident;
     }) => {
-        $crate::lora::LoraPins {
+        $crate::lora::LoraPinBundle {
             sclk: $peripherals.$sclk,
             mosi: $peripherals.$mosi,
             miso: $peripherals.$miso,
@@ -53,3 +57,19 @@ macro_rules! XIAO_S3 {
         })
     };
 }
+
+use esp_hal::peripherals::{GPIO7, GPIO8, GPIO9, GPIO38, GPIO39, GPIO40, GPIO41, GPIO42, SPI2};
+
+use crate::lora::LoraPinBundle;
+
+pub type XiaoS3 = LoraPinBundle<
+    GPIO7<'static>,
+    GPIO9<'static>,
+    GPIO8<'static>,
+    GPIO41<'static>,
+    GPIO42<'static>,
+    GPIO40<'static>,
+    GPIO39<'static>,
+    GPIO38<'static>,
+    SPI2<'static>,
+>;

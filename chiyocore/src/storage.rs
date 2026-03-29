@@ -1,4 +1,4 @@
-use core::ffi::CStr;
+use core::{ffi::CStr, ops::Deref};
 
 use alloc::{
     string::{String, ToString},
@@ -8,7 +8,7 @@ use alloc::{
 use base64::{Engine, prelude::BASE64_URL_SAFE};
 use embedded_storage::nor_flash::ReadNorFlash;
 use esp_storage::FlashStorage;
-use littlefs2::{consts::U256, fs::Filesystem, object_safe::DynFilesystem, path::Path};
+use littlefs2::{consts::U256, fs::Filesystem, path::Path};
 use ouroboros::self_referencing;
 use serde::{Serialize, de::DeserializeOwned};
 
@@ -410,6 +410,7 @@ impl<T: Cacheable, const SIZE: usize> CachedFileDb<SIZE, T> {
     }
 }
 
+#[derive(Clone)]
 pub struct SimpleFileDb<const SIZE: usize> {
     fs: Arc<EspMutex<ActiveFilesystem<SIZE>>>,
     prefix: littlefs2::path::PathBuf,
@@ -493,5 +494,56 @@ impl<const SIZE: usize> SimpleFileDb<SIZE> {
             .await
             .with_fs_mut(|fs| fs.remove(&path))
             .map_err(FirmwareError::from)
+    }
+
+    pub async fn get_persistable<T: Serialize + DeserializeOwned + Default>(
+        &self,
+        key: &'static CStr,
+        def: impl FnOnce() -> T,
+    ) -> FirmwareResult<PersistedObject<T, SIZE>> {
+        let data = match self.get(key).await? {
+            Some(v) => v,
+            None => {
+                let v = def();
+                self.insert(key, &v).await?;
+                v
+            }
+        };
+
+        Ok(PersistedObject {
+            key,
+            data,
+            db: self.clone(),
+        })
+    }
+}
+
+pub struct PersistedObject<T: Serialize + DeserializeOwned + Default, const SIZE: usize> {
+    pub key: &'static CStr,
+    data: T,
+    db: SimpleFileDb<SIZE>,
+}
+
+impl<T: Serialize + DeserializeOwned + Default, const SIZE: usize> Deref
+    for PersistedObject<T, SIZE>
+{
+    type Target = T;
+
+    fn deref(&self) -> &Self::Target {
+        &self.data
+    }
+}
+
+impl<T: Serialize + DeserializeOwned + Default, const SIZE: usize> PersistedObject<T, SIZE> {
+    pub async fn set(&mut self, new_val: T) -> FirmwareResult<()> {
+        self.db.insert(self.key, &new_val).await?;
+        self.data = new_val;
+        Ok(())
+    }
+
+    pub async fn with_mut(&mut self, f: impl FnOnce(&mut T)) -> FirmwareResult<()> {
+        f(&mut self.data);
+        self.db.insert(self.key, &self.data).await?;
+        Ok(())
     }
 }

@@ -1,15 +1,14 @@
 use alloc::borrow::Cow;
 use arrayref::array_ref;
 use esp_hal::sha::Sha1Context;
-use meshcore::{Packet, PayloadType, payloads::TextMessageData};
+use meshcore::{
+    Packet, PayloadType,
+    payloads::{TextMessageData, TextType},
+};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     EspMutex,
-    companion_protocol::protocol::{
-        CompanionSer,
-        responses::{ChannelMsgRecv, ContactMsgRecv},
-    },
     simple_mesh::storage::{channel::Channel, contact::CachedContact},
 };
 
@@ -71,77 +70,6 @@ impl<const CAPACITY: usize> HashLog<CAPACITY> {
 
         let _ = log.push_front(hash);
         true
-    }
-}
-
-// copied off trim_ascii_end's impl
-pub fn trim_slice_nils(data: &[u8]) -> &[u8] {
-    let mut bytes = data;
-    while let [rest @ .., last] = bytes {
-        if *last == 0 {
-            bytes = rest;
-        } else {
-            break;
-        }
-    }
-
-    bytes
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub enum SavedMessage<'a> {
-    Contact(ContactMsgRecv<'a>),
-    Channel(ChannelMsgRecv<'a>),
-}
-
-impl<'a> CompanionSer for SavedMessage<'a> {
-    fn ser_size(&self) -> usize {
-        match self {
-            SavedMessage::Contact(contact_msg_recv) => contact_msg_recv.ser_size(),
-            SavedMessage::Channel(channel_msg_recv) => channel_msg_recv.ser_size(),
-        }
-    }
-
-    fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-        match self {
-            SavedMessage::Contact(contact_msg_recv) => contact_msg_recv.companion_serialize(out),
-            SavedMessage::Channel(channel_msg_recv) => channel_msg_recv.companion_serialize(out),
-        }
-    }
-}
-
-impl<'a> SavedMessage<'a> {
-    pub fn channel_msg(
-        channel: &Channel,
-        packet: &Packet,
-        message: &'a TextMessageData<'a>,
-    ) -> Self {
-        SavedMessage::Channel(ChannelMsgRecv {
-            snr: 0,
-            reserved: [0u8; 2],
-            idx: channel.idx,
-            path_len: packet.path.len() as u8,
-            text_ty: message.header.text_type(),
-            timestamp: message.timestamp,
-            data: Cow::Borrowed(trim_slice_nils(message.message.as_ref())),
-        })
-    }
-
-    pub fn contact_msg(
-        contact: &CachedContact,
-        packet: &Packet,
-        message: &'a TextMessageData<'a>,
-    ) -> Self {
-        SavedMessage::Contact(ContactMsgRecv {
-            snr: 0,
-            reserved: [0u8; 2],
-            pk_prefix: *array_ref![contact.key, 0, 6],
-            path_len: packet.path.len() as u8,
-            text_ty: message.header.text_type(),
-            timestamp: message.timestamp,
-            signature: None,
-            data: Cow::Borrowed(trim_slice_nils(message.message.as_ref())),
-        })
     }
 }
 
@@ -227,6 +155,132 @@ impl<'a> HashableMessage for SavedMessage<'a> {
                 .hash_into(hasher, out)
                 .await
             }
+        }
+    }
+}
+
+// copied off trim_ascii_end's impl
+pub fn trim_slice_nils(data: &[u8]) -> &[u8] {
+    let mut bytes = data;
+    while let [rest @ .., last] = bytes {
+        if *last == 0 {
+            bytes = rest;
+        } else {
+            break;
+        }
+    }
+
+    bytes
+}
+
+#[derive(Serialize, Deserialize, Debug)]
+pub enum SavedMessage<'a> {
+    Contact(ContactMsgRecv<'a>),
+    Channel(ChannelMsgRecv<'a>),
+}
+
+impl<'a> SavedMessage<'a> {
+    pub fn channel_msg(
+        channel: &Channel,
+        packet: &Packet,
+        message: &'a TextMessageData<'a>,
+    ) -> Self {
+        SavedMessage::Channel(ChannelMsgRecv {
+            snr: 0,
+            reserved: [0u8; 2],
+            idx: channel.idx,
+            path_len: packet.path.len() as u8,
+            text_ty: message.header.text_type(),
+            timestamp: message.timestamp,
+            data: Cow::Borrowed(trim_slice_nils(message.message.as_ref())),
+        })
+    }
+
+    pub fn contact_msg(
+        contact: &CachedContact,
+        packet: &Packet,
+        message: &'a TextMessageData<'a>,
+    ) -> Self {
+        SavedMessage::Contact(ContactMsgRecv {
+            snr: 0,
+            reserved: [0u8; 2],
+            pk_prefix: *array_ref![contact.key, 0, 6],
+            path_len: packet.path.len() as u8,
+            text_ty: message.header.text_type(),
+            timestamp: message.timestamp,
+            signature: None,
+            data: Cow::Borrowed(trim_slice_nils(message.message.as_ref())),
+        })
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ContactMsgRecv<'a> {
+    pub snr: i8,
+    pub reserved: [u8; 2],
+    pub pk_prefix: [u8; 6],
+    pub path_len: u8,
+    pub text_ty: TextType,
+    pub timestamp: u32,
+    pub signature: Option<[u8; 4]>,
+    pub data: Cow<'a, [u8]>,
+}
+
+impl<'a> ContactMsgRecv<'a> {
+    pub fn clone_with_data(&self) -> ContactMsgRecv<'static> {
+        let ContactMsgRecv {
+            snr,
+            reserved,
+            pk_prefix,
+            path_len,
+            text_ty,
+            timestamp,
+            signature,
+            data,
+        } = self;
+        ContactMsgRecv {
+            snr: *snr,
+            reserved: *reserved,
+            pk_prefix: *pk_prefix,
+            path_len: *path_len,
+            text_ty: *text_ty,
+            timestamp: *timestamp,
+            signature: *signature,
+            data: Cow::Owned(data.to_vec()),
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ChannelMsgRecv<'a> {
+    pub snr: i8,
+    pub reserved: [u8; 2],
+    pub idx: u8,
+    pub path_len: u8,
+    pub text_ty: TextType,
+    pub timestamp: u32,
+    pub data: Cow<'a, [u8]>,
+}
+
+impl<'a> ChannelMsgRecv<'a> {
+    pub fn clone_with_data(&self) -> ChannelMsgRecv<'static> {
+        let ChannelMsgRecv {
+            snr,
+            reserved,
+            idx,
+            path_len,
+            text_ty,
+            timestamp,
+            data,
+        } = self;
+        ChannelMsgRecv {
+            snr: *snr,
+            reserved: *reserved,
+            idx: *idx,
+            path_len: *path_len,
+            text_ty: *text_ty,
+            timestamp: *timestamp,
+            data: Cow::Owned(data.to_vec()),
         }
     }
 }

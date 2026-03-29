@@ -1,17 +1,16 @@
 use alloc::string::String;
+use chiyocore::simple_mesh::storage::contact::Contact;
 use meshcore::{
     DecodeError, DecodeResult, Path, PathHashMode,
     io::{SliceWriter, TinyReadExt},
     payloads::TextType,
 };
 use modular_bitfield::Specifier as _;
+use smallvec::SmallVec;
 use smol_str::SmolStr;
 use strum::FromRepr;
 
-use crate::{
-    companion_protocol::protocol::responses::{CompanionProtoResult, CustomVars},
-    simple_mesh::storage::contact::Contact,
-};
+use crate::companion_protocol::protocol::responses::{CompanionProtoResult, CustomVars};
 
 pub trait CompanionSer {
     fn ser_size(&self) -> usize;
@@ -21,22 +20,26 @@ pub trait CompanionSer {
 pub mod responses {
     use alloc::borrow::Cow;
 
+    pub use chiyocore::simple_mesh::MsgSent;
+    use chiyocore::simple_mesh::packet_log::{ChannelMsgRecv, ContactMsgRecv, SavedMessage};
+    use chiyocore::simple_mesh::storage::contact::Contact;
+    use chiyocore::{CompanionError, FirmwareError};
     use lora_phy::mod_params::PacketStatus;
     use meshcore::Path;
+    use meshcore::io::SliceWriter;
+    use meshcore::payloads::AppdataFlags;
     use meshcore::repeater_protocol::Permissions;
-    use meshcore::{io::SliceWriter, payloads::TextType};
-    use serde::{Deserialize, Serialize};
+
     use smallvec::SmallVec;
 
     use super::CompanionSer;
     use super::ResponseCodes;
-    use crate::CompanionError;
-    use crate::FirmwareError;
     use crate::companion_protocol::protocol::NullPaddedString;
     use crate::companion_protocol::protocol::StatTypes;
 
     use super::NullPaddedSlice;
 
+    #[derive(Clone)]
     pub enum GetMessageRes<'a> {
         Contact(ContactMsgRecv<'a>),
         Channel(ChannelMsgRecv<'a>),
@@ -300,12 +303,6 @@ pub mod responses {
         }
     }
 
-    pub struct MsgSent {
-        pub is_flood: bool,
-        pub expected_ack: [u8; 4],
-        pub suggested_timeout: u32,
-    }
-
     impl CompanionSer for MsgSent {
         fn ser_size(&self) -> usize {
             1 // packet ty
@@ -324,18 +321,6 @@ pub mod responses {
 
             out.finish()
         }
-    }
-
-    #[derive(Serialize, Deserialize, Debug)]
-    pub struct ContactMsgRecv<'a> {
-        pub snr: i8,
-        pub reserved: [u8; 2],
-        pub pk_prefix: [u8; 6],
-        pub path_len: u8,
-        pub text_ty: TextType,
-        pub timestamp: u32,
-        pub signature: Option<[u8; 4]>,
-        pub data: Cow<'a, [u8]>,
     }
 
     impl<'a> CompanionSer for ContactMsgRecv<'a> {
@@ -372,15 +357,24 @@ pub mod responses {
         }
     }
 
-    #[derive(Serialize, Deserialize, Debug, Clone)]
-    pub struct ChannelMsgRecv<'a> {
-        pub snr: i8,
-        pub reserved: [u8; 2],
-        pub idx: u8,
-        pub path_len: u8,
-        pub text_ty: TextType,
-        pub timestamp: u32,
-        pub data: Cow<'a, [u8]>,
+    impl<'a> CompanionSer for SavedMessage<'a> {
+        fn ser_size(&self) -> usize {
+            match self {
+                SavedMessage::Contact(contact_msg_recv) => contact_msg_recv.ser_size(),
+                SavedMessage::Channel(channel_msg_recv) => channel_msg_recv.ser_size(),
+            }
+        }
+
+        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
+            match self {
+                SavedMessage::Contact(contact_msg_recv) => {
+                    contact_msg_recv.companion_serialize(out)
+                }
+                SavedMessage::Channel(channel_msg_recv) => {
+                    channel_msg_recv.companion_serialize(out)
+                }
+            }
+        }
     }
 
     impl<'a> CompanionSer for ChannelMsgRecv<'a> {
@@ -775,7 +769,7 @@ pub mod responses {
     }
 
     pub struct BinaryResponse<'a> {
-        pub data: Cow<'a, [u8]>
+        pub data: Cow<'a, [u8]>,
     }
 
     impl<'a> CompanionSer for BinaryResponse<'a> {
@@ -784,12 +778,64 @@ pub mod responses {
             + 1 // reserved
             + self.data.len()
         }
-    
+
         fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
             let mut out = SliceWriter::new(out);
             out.write_u8(ResponseCodes::BinaryResponse as u8);
             out.write_u8(0); // reserved
             out.write_slice(&self.data);
+            out.finish()
+        }
+    }
+
+    impl CompanionSer for Contact {
+        fn ser_size(&self) -> usize {
+            1 // packet_ty
+        + 32 // pk
+        + 1 // adv_ty
+        + 1 // flags
+        + 1 // path_to_len 
+        + 64 // path_to
+        + 32 // name
+        + 4 // last_heard
+        + 4 // latitude
+        + 4 // longitude
+        + 4 // last_mod 
+        }
+
+        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
+            let mut out = SliceWriter::new(out);
+
+            out.write_u8(ResponseCodes::Contact as u8);
+            out.write_slice(&self.key);
+            let flags = AppdataFlags::from_bits(self.flags).unwrap();
+            let adv_ty = if flags.contains(AppdataFlags::IS_CHAT_NODE) {
+                1
+            } else if flags.contains(AppdataFlags::IS_REPEATER) {
+                2
+            } else if flags.contains(AppdataFlags::IS_ROOM_SERVER) {
+                3
+            } else {
+                0
+            };
+
+            out.write_u8(adv_ty);
+            out.write_u8(flags.bits());
+            if let Some(path) = self.path_to.as_ref() {
+                out.write_u8(path.path_len_header().into_bytes()[0]);
+                NullPaddedSlice::<64>::from(path.raw_bytes()).encode_to(&mut out);
+            } else {
+                // flood
+                out.write_u8(0xFF);
+                NullPaddedSlice::<64>(&[]).encode_to(&mut out);
+            }
+
+            NullPaddedSlice::<32>::from(self.name.as_str()).encode_to(&mut out);
+            out.write_u32_le(self.last_heard);
+            out.write_u32_le(self.latitude);
+            out.write_u32_le(self.longitude);
+            out.write_u32_le(0);
+
             out.finish()
         }
     }
@@ -856,7 +902,7 @@ pub enum ResponseCodes {
     CustomVars = 0x15,
     TraceData = 0x89,
     ControlData = 0x8E,
-    BinaryResponse = 0x8C
+    BinaryResponse = 0x8C,
 }
 
 #[derive(FromRepr, Debug)]
@@ -903,7 +949,7 @@ pub enum HostCommandType {
     SetCustomVar = 41,
     SendControlData = 55,
     GetStats = 56,
-    SendAnonReq = 57
+    SendAnonReq = 57,
 }
 
 #[derive(FromRepr)]
@@ -916,6 +962,36 @@ pub enum StatTypes {
 
 pub trait CompanionSink {
     fn write_packet(&mut self, packet: &impl CompanionSer) -> impl Future<Output = ()>;
+}
+
+#[derive(Clone)]
+pub struct ChannelCompanionSink {
+    tx: thingbuf::mpsc::Sender<SmallVec<[u8; 256]>>,
+}
+
+impl ChannelCompanionSink {
+    pub fn new(tx: thingbuf::mpsc::Sender<SmallVec<[u8; 256]>>) -> Self {
+        ChannelCompanionSink {
+            tx,
+            // scratch: Vec::with_capacity(32),
+        }
+    }
+}
+
+impl CompanionSink for ChannelCompanionSink {
+    async fn write_packet(&mut self, packet: &impl CompanionSer) {
+        let Ok(mut slot) = self.tx.try_send_ref() else {
+            return;
+        };
+
+        let size = packet.ser_size();
+        slot.push(b'\x3e');
+        slot.extend_from_slice(&(size as u16).to_le_bytes());
+        slot.resize(size + 3, 0);
+        packet.companion_serialize(&mut slot[3..]);
+        // slot.extend_from_slice(data);
+        drop(slot);
+    }
 }
 
 pub async fn parse_packet(
@@ -1107,8 +1183,9 @@ pub async fn parse_packet(
         SendBinaryReq => {
             let pub_key = packet.read_chunk::<32>()?;
             let data = packet;
-            out.write_packet(&handler.send_binary_req(pub_key, data).await).await;
-        },
+            out.write_packet(&handler.send_binary_req(pub_key, data).await)
+                .await;
+        }
         SetFloodScope => {
             out.write_packet(&responses::Ok { code: None }).await;
         }
@@ -1141,7 +1218,8 @@ pub async fn parse_packet(
         SendAnonReq => {
             let pubkey = packet.read_chunk::<32>()?;
             let data = packet;
-            out.write_packet(&handler.send_anon_req(pubkey, data).await).await;
+            out.write_packet(&handler.send_anon_req(pubkey, data).await)
+                .await;
         }
     }
 
@@ -1181,7 +1259,7 @@ pub trait CompanionHandler {
         idx: u8,
         timestamp: u32,
         txt: &str,
-    ) -> impl Future<Output = CompanionProtoResult<responses::MsgSent>>;
+    ) -> impl Future<Output = CompanionProtoResult<chiyocore::simple_mesh::MsgSent>>;
 
     fn send_contact_message(
         &mut self,
@@ -1190,7 +1268,7 @@ pub trait CompanionHandler {
         timestamp: u32,
         destination: &[u8; 6],
         text: &str,
-    ) -> impl Future<Output = CompanionProtoResult<responses::MsgSent>>;
+    ) -> impl Future<Output = CompanionProtoResult<chiyocore::simple_mesh::MsgSent>>;
 
     fn get_time(&mut self) -> impl Future<Output = CompanionProtoResult<responses::CurrentTime>>;
     fn set_time(&mut self, time: u32) -> impl Future<Output = CompanionProtoResult<responses::Ok>>;
@@ -1251,7 +1329,7 @@ pub trait CompanionHandler {
         &mut self,
         pk: &[u8; 32],
         password: &[u8],
-    ) -> impl Future<Output = CompanionProtoResult<responses::MsgSent>>;
+    ) -> impl Future<Output = CompanionProtoResult<chiyocore::simple_mesh::MsgSent>>;
 
     fn get_contacts(
         &mut self,
@@ -1305,9 +1383,17 @@ pub trait CompanionHandler {
         auth_code: [u8; 4],
         flags: u8,
         path: Path<'_>,
-    ) -> impl Future<Output = CompanionProtoResult<responses::MsgSent>>;
+    ) -> impl Future<Output = CompanionProtoResult<chiyocore::simple_mesh::MsgSent>>;
 
-    fn send_binary_req(&mut self, pub_key: &[u8; 32], data: &[u8]) -> impl Future<Output = CompanionProtoResult<responses::MsgSent>>;
+    fn send_binary_req(
+        &mut self,
+        pub_key: &[u8; 32],
+        data: &[u8],
+    ) -> impl Future<Output = CompanionProtoResult<chiyocore::simple_mesh::MsgSent>>;
 
-    fn send_anon_req(&mut self, pub_key: &[u8; 32], data: &[u8]) -> impl Future<Output = CompanionProtoResult<responses::MsgSent>>;
+    fn send_anon_req(
+        &mut self,
+        pub_key: &[u8; 32],
+        data: &[u8],
+    ) -> impl Future<Output = CompanionProtoResult<chiyocore::simple_mesh::MsgSent>>;
 }
