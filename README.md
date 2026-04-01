@@ -16,31 +16,56 @@ this is extremely experimental and not guaranteed to work or not fry your radio/
 ## how to get it running
 
 ### set up a board definition
-you'll need to set up a board definition file with the pin-out for the LoRa module, plus ram size for heap allocations. [you can see an example here](board-defs/xiao-s3-kit.toml)
+you'll need to set up a board definition file with the pin-out for the LoRa module, plus ram size for heap allocations. [you can see an example here](blossoms/boards/xiao-s3-kit.toml)
 
 ### configure your firmware build
-the firmware is generated off of the firmware.toml file. currently, only companion nodes accessible over wifi are supported, plus a simple ping bot.
+the firmware is generated off a Rusty Object Notation (RON) file. [here's an example](blossoms/setups/sample.ron) for a board running two companions on different tcp ports, plus a ping bot.
 
- here's how it works:
-```toml
-app_stack_size = 32768 # this is how much stack memory the node handler will have
-board = "xiao-s3-kit" # your board definition (stored in board-defs/)
+```ron 4
+#![enable(unwrap_variant_newtypes)]
 
-[global_conf.wifi] # wifi config
-ssid = "your-ssid-here"
-pw = "your-wifi-pw-here"
-
-[[nodes]] # define the first node
-slot = "companion-0" # slot for this node's identity keys
-layers = ["CompanionBuilder<0, 5000>"] # this node will have one Companion handler, running on slot 0 and listening on port 5000
-
-[[nodes]] # second node
-slot = "companion-1"
-layers = ["CompanionBuilder<1, 3000>", "PingBot"] # one Companion handler, running on slot 1 and listening on port 3000, plus a simple ping bot
+ChiyocoreConfig(
+  firmware: (
+    stack_size: 32768,
+    config: {
+      "wifi.ssid": "nya",
+      "wifi.pw": "nya"
+    },
+    default_channels: ["#test", "#emitestcorner", "#wardriving"]
+  ),
+  nodes: [
+    Node(
+      id: "chiyo0",
+      layers: [
+        Companion(
+          id: "companion-0",
+          tcp_port: 5000
+        ),
+        PingBot(
+          name: "cafe / chiyobot 🌃☕",
+          channels: [
+            "#test",
+            "#emitestcorner"
+          ]
+        )
+      ]
+    ),
+    Node(
+      id: "chiyo1",
+      layers: [
+        Companion(
+          id: "companion-1",
+          tcp_port: 3000
+        )
+      ]
+    )
+  ]
+)
 ```
 
 ### run it
-flash the firmware using `cargo run --release`, then connect to your node using a meshcore companion client. the firmware will print the board's ip address to the terminal as it boots up!
+`./flash.sh blossoms/boards/<your-board-here.toml> blossoms/setups/<your-setup-here.ron>`
+
 
 with meshcore-cli:
 `meshcore-cli -t <board-ip-address> -p <companion-port>`

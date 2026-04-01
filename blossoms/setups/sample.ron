@@ -1,0 +1,39 @@
+#![enable(unwrap_variant_newtypes)]
+
+ChiyocoreConfig(
+  firmware: (
+    stack_size: 32768,
+    config: {
+      "wifi.ssid": "nya",
+      "wifi.pw": "nya"
+    },
+    default_channels: ["#test", "#emitestcorner", "#wardriving"]
+  ),
+  nodes: [
+    Node(
+      id: "chiyo0",
+      layers: [
+        Companion(
+          id: "companion-0",
+          tcp_port: 5000
+        ),
+        PingBot(
+          name: "cafe / chiyobot 🌃☕",
+          channels: [
+            "#test",
+            "#emitestcorner"
+          ]
+        )
+      ]
+    ),
+    Node(
+      id: "chiyo1",
+      layers: [
+        Companion(
+          id: "companion-1",
+          tcp_port: 3000
+        )
+      ]
+    )
+  ]
+)
