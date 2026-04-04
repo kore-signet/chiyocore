@@ -187,6 +187,7 @@ fn main() {
                     adc: peripherals.ADC1,
                     dma: peripherals.DMA_CH0,
                     flash: peripherals.FLASH,
+                    rsa: peripherals.RSA
                 },
                 $pins,
             )

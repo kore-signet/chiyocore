@@ -166,6 +166,8 @@ pub async fn lora_init<T: LoraPins>(
     .with_miso(pins.miso)
     .into_async();
 
+    // let out = esp_hal::gpio::Output::new(pin, initial_level, config)
+
     // Initialize the static SPI bus
     let spi_bus = SPI_BUS.init(embassy_sync::mutex::Mutex::new(spi));
     let spi_device =
@@ -182,6 +184,9 @@ pub async fn lora_init<T: LoraPins>(
     // Create the radio instance
     let iv = lora_phy::iv::GenericSx126xInterfaceVariant::new(reset, dio1, busy, Some(rx_en), None)
         .unwrap();
+
+    // log::info!("{}",lora.get_rssi().await.unwrap());
+
     lora_phy::LoRa::new(
         lora_phy::sx126x::Sx126x::new(spi_device, iv, sx126x_config),
         false,

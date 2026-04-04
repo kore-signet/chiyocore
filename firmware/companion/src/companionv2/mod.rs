@@ -1,8 +1,8 @@
 use alloc::{ffi::CString, sync::Arc};
+use chiyocore::{PacketStatus, meshcore};
 use embassy_sync::rwlock::RwLock;
 use esp_hal::rtc_cntl::Rtc;
 use litemap::LiteMap;
-use lora_phy::mod_params::PacketStatus;
 use meshcore::{
     Packet, SerDeser,
     identity::LocalIdentity,

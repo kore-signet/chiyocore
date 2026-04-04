@@ -1,11 +1,13 @@
 use core::{ops::DerefMut, time::Duration};
 
+use crate::PacketStatus;
 use alloc::{borrow::Cow, string::String, sync::Arc, vec::Vec};
 use arrayref::array_ref;
+use embassy_executor::SendSpawner;
 use embassy_sync::rwlock::RwLock;
 use esp_hal::rtc_cntl::Rtc;
 use futures_util::FutureExt;
-use lora_phy::mod_params::PacketStatus;
+use maitake_sync::{WaitCell, WaitMap};
 use meshcore::{
     Packet, PacketHeader, PacketPayload, Path, PathHashMode, PayloadType, RouteType, SerDeser,
     crypto::{ChannelKeys, ContainsEncryptable, DecryptedView, Encryptable, VerifiablePayload},
@@ -41,6 +43,12 @@ pub struct MsgSent {
     pub suggested_timeout: u32,
 }
 
+#[derive(Clone, Copy)]
+pub struct AckState {
+    pub failed: bool,
+    pub attempt: u8,
+}
+
 pub struct SimpleMesh {
     pub identity: LocalIdentity,
     pub packet_log: HashLog<32>,
@@ -50,7 +58,8 @@ pub struct SimpleMesh {
     pub path_hash_mode: PathHashMode,
     pub storage: MeshStorage,
     pub rtc: Arc<Rtc<'static>>,
-    key_cache: SharedKeyCache, // layers: SmallVec<[Arc<EspMutex<Box<dyn SimpleMeshLayer + Send>>>; 2]>, // don't love this triple allocation
+    ack_table: Arc<WaitMap<[u8; 4], bool>>,
+    key_cache: SharedKeyCache,
 }
 
 impl SimpleMesh {
@@ -70,31 +79,117 @@ impl SimpleMesh {
             path_hash_mode: PathHashMode::OneByte,
             rtc: Arc::clone(rtc),
             storage,
+            ack_table: Arc::new(WaitMap::new()), // ack_table: LiteMap::new_vec()
+        }
+    }
+}
+
+#[embassy_executor::task(pool_size = 16)]
+async fn send_with_retry(
+    wait_map: Arc<WaitMap<[u8; 4], bool>>,
+    mut message: TextMessageData<'static>,
+    contact: ForeignIdentity,
+    mesh: Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
+    mut path: Option<meshcore::Path<'static>>,
+    waker: Arc<WaitCell>,
+) {
+    let self_identity = mesh.read().await.identity.clone();
+    let mut attempt = 0u8;
+    let mut has_flooded = false;
+    // let mut has_flooded = path.is_none();
+    while attempt <= 3 {
+        log::info!("retrying msg, attempt {attempt}");
+        message.header = message.header.with_attempt(attempt);
+
+        let expected_ack =
+            Ack::calculate::<HardwareSHA>(&message, &self_identity.as_foreign()).await;
+
+        let delay = mesh
+            .read()
+            .await
+            .send_to_contact::<TextMessageData<'_>>(&contact, path.clone(), &message, None)
+            .await
+            .unwrap();
+
+        let delay = delay.max(Duration::from_secs(1));
+
+        match embassy_futures::select::select(
+            wait_map.wait(expected_ack.crc),
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(
+                delay.as_millis() as u64
+            )),
+        )
+        .await
+        {
+            embassy_futures::select::Either::First(_) => {
+                waker.wake();
+                break;
+            }
+            embassy_futures::select::Either::Second(_) => {
+                attempt += 1;
+                if attempt >= 3 && !has_flooded {
+                    attempt = 0;
+                    let mesh = mesh.read().await;
+                    let mut contacts = mesh.storage.contacts.write().await;
+                    let mut contact = contacts
+                        .full_get(*contact.verify_key)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    contact.path_to = None;
+                    contacts.insert(contact).await.unwrap();
+
+                    path = None;
+                    has_flooded = true;
+                }
+            }
         }
     }
 
-    // pub fn add_layer(&mut self, layer: impl SimpleMeshLayer + Send + 'static) -> Arc<EspMutex<Box<dyn SimpleMeshLayer + Send>>> {
-    //     let layer: Arc<embassy_sync::mutex::Mutex<esp_sync::RawMutex, Box<dyn SimpleMeshLayer + Send + 'static>>> = Arc::new(
-    //         EspMutex::new(
-    //             Box::new(
-    //                 layer
-    //             )
-    //         )
-    //     );
-
-    //     self.layers.push(Arc::clone(&layer));
-    //     layer
-    // }
+    waker.wake();
 }
 
 /* tx methods */
 impl SimpleMesh {
+    pub async fn send_to_contact_with_retry<P: SerDeser + Encryptable + PacketPayload>(
+        mesh: &Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
+        contact: &ForeignIdentity,
+        path: Option<meshcore::Path<'static>>,
+        message: &TextMessageData<'_>,
+    ) -> CompanionResult<Arc<WaitCell>> {
+        let message = TextMessageData {
+            timestamp: message.timestamp,
+            header: message.header,
+            message: message.message.clone().into_owned().into(),
+        };
+        let identity = contact.clone();
+        let mesh = Arc::clone(mesh);
+
+        let wait_map = Arc::clone(&mesh.read().await.ack_table);
+        let wait_cell = Arc::new(WaitCell::new());
+
+        SendSpawner::for_current_executor()
+            .await
+            .spawn(send_with_retry(
+                wait_map,
+                message,
+                identity,
+                mesh,
+                path,
+                Arc::clone(&wait_cell),
+            ))
+            .unwrap();
+
+        Ok(wait_cell)
+    }
+
     /// returns est. timeout
     pub async fn send_to_contact<P: SerDeser + Encryptable + PacketPayload>(
         &self,
         contact: &ForeignIdentity,
         path: Option<meshcore::Path<'_>>,
         message: &P::Representation<'_>,
+        delay: Option<Duration>,
     ) -> CompanionResult<Duration> {
         let mut encrypt_scratch = BumpaloVec::new_in(&self.scratch);
         let mut encode_vec = BumpaloVec::new_in(&self.scratch);
@@ -130,9 +225,7 @@ impl SimpleMesh {
             payload: Cow::Borrowed(&encode_vec),
         };
 
-        self.packet_log.push(&packet).await;
-
-        let timeout = self.lora_tx.send_packet(&packet).await;
+        let timeout = self.send_packet(&packet, true, delay).await?;
 
         Ok(timeout)
     }
@@ -176,11 +269,12 @@ impl SimpleMesh {
         contact: &ForeignIdentity,
         path: Option<meshcore::Path<'_>>, // if None, flood
         message: TextMessageData<'_>,
+        delay: Option<Duration>,
     ) -> CompanionResult<MsgSent> {
         let is_flood = path.is_none();
         let ack = Ack::calculate::<HardwareSHA>(&message, &self.identity.as_foreign()).await;
         let timeout = self
-            .send_to_contact::<TextMessageData>(contact, path, &message)
+            .send_to_contact::<TextMessageData>(contact, path, &message, delay)
             .await?;
 
         Ok(MsgSent {
@@ -434,36 +528,36 @@ impl SimpleMesh {
             return Ok(None);
         }
 
-        // todo: we might want to iterate through all keys starting with prefix
-        let Some(other_ident) = self
-            .storage
-            .contacts
-            .read()
-            .await
-            .fast_get(&[payload.source_hash])
-            .cloned()
-        else {
-            log::error!("\tmessage is destined to us, but no matching key for src found!");
+        let contacts_storage = self.storage.contacts.read().await;
+        let Some(mut contact_idx) = contacts_storage.find_idx(&[payload.source_hash]) else {
             return Err(CompanionError::NoKnownContact);
         };
 
-        // let shared_secret = self.identity.shared_secret(&other_ident.as_identity());
-        let shared_secret = self.key_cache.get_key(&other_ident.as_identity()).await;
+        while let Some(other_ident) = contacts_storage
+            .hot_cache
+            .get(contact_idx)
+            .filter(|v| v.key[0] == payload.source_hash)
+        {
+            let shared_secret = self.key_cache.get_key(&other_ident.as_identity()).await;
 
-        // if !payload.verify::<HardwareHMAC>(array_ref![&shared_secret, 16, 16]) {
-        //     log::error!("\tmessage failed verify");
-        //     return Err(CompanionError::VerifyFailure);
-        // }
+            if !payload.verify::<HardwareHMAC>(array_ref![&shared_secret, 0, 32]) {
+                log::error!("\tmessage failed verify, trying next contact");
+                contact_idx += 1;
+                continue;
+            }
 
-        let Ok(msg) = payload
-            .decrypt::<HardwareAES>(array_ref![&shared_secret, 0, 16], scratch)
-            .await
-        else {
-            log::error!("\tmessage failed to decrypt");
-            return Err(CompanionError::DecryptFailure);
-        };
+            let Ok(msg) = payload
+                .decrypt::<HardwareAES>(array_ref![&shared_secret, 0, 16], scratch)
+                .await
+            else {
+                log::error!("\tmessage failed to decrypt");
+                return Err(CompanionError::DecryptFailure);
+            };
 
-        Ok(Some((other_ident, msg)))
+            return Ok(Some((other_ident.clone(), msg)));
+        }
+
+        Err(CompanionError::NoKnownContact)
     }
 
     async fn decode_channel_message<'s>(
@@ -511,6 +605,7 @@ impl SimpleMesh {
         layers: &mut impl SimpleMeshLayer,
     ) -> CompanionResult<()> {
         let mut decrypt_scratch = BumpaloVec::new_in(&self.scratch);
+
         let Some((contact, text)) = self
             .decode_contact_message::<TextMessageData<'_>>(&message, &mut decrypt_scratch)
             .await?
@@ -520,7 +615,6 @@ impl SimpleMesh {
 
         let text = text.decoded()?;
         self.send_ack(packet, &text, &contact).await?;
-
         if !self
             .message_log
             .push(&SavedMessage::contact_msg(&contact, packet, &text))
@@ -533,20 +627,6 @@ impl SimpleMesh {
         layers
             .text_message(self, packet, packet_status, &contact, &text)
             .await?;
-        // }
-
-        // for layer in self.layers.iter() {
-        //     layer.lock().await
-        //         .text_message(self, packet, packet_status, &contact, &text)
-        //         .await;
-        // }
-
-        // self.layers.iter_mut().for_each(|v| );
-        // log::info!(
-        //     "\t[DM] {contact_name} > {text_msg}",
-        //     contact_name = contact_full.name,
-        //     text_msg = text.as_utf8()? // text_msg = text.decoded()?.as_utf8()?
-        // );
 
         Ok(())
     }
@@ -592,7 +672,8 @@ impl SimpleMesh {
         ack: Ack,
         layers: &mut impl SimpleMeshLayer,
     ) -> CompanionResult<()> {
-        // for layer in layers {
+        self.ack_table.wake(&ack.crc, true);
+
         layers.ack(self, packet, packet_status, &ack).await?;
         // }
 
@@ -627,7 +708,7 @@ impl SimpleMesh {
             .insert(Contact {
                 key: payload.public_key,
                 name: String::from(name),
-                path_to: Some(packet.path.to_owned()),
+                path_to: None,
                 flags: appdata.flags.bits(),
                 latitude: appdata.latitude.unwrap_or(0),
                 longitude: appdata.longitude.unwrap_or(0),
@@ -664,11 +745,9 @@ impl SimpleMesh {
         contact_full.path_to = Some(decoded.path.to_owned());
         contacts_db.insert(contact_full).await?;
 
-        // for layer in &mut layers[..] {
         layers
             .returned_path(self, packet, packet_status, &contact, &decoded)
             .await?;
-        // }
 
         let Some((extra_ty, extra_bytes)) = decoded.extra.as_ref() else {
             return Ok(());

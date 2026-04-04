@@ -19,6 +19,7 @@ impl FormatInto<Rust> for CompanionConfig {
 impl FormatInto<Rust> for LayerConfig {
     fn format_into(self, tokens: &mut genco::Tokens<Rust>) {
         match self {
+            LayerConfig::TTCBot => quote_in!(*tokens => ()),
             LayerConfig::PingBot(ping_cfg) => ping_cfg.format_into(tokens),
             LayerConfig::Companion(companion_config) => companion_config.format_into(tokens),
         }

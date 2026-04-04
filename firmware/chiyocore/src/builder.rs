@@ -5,8 +5,9 @@ use embassy_executor::Spawner;
 use embassy_sync::rwlock::RwLock;
 use esp_hal::{
     aes::dma::{AesDmaBackend, AesDmaWorkQueueDriver},
-    peripherals::{ADC1, AES, DMA_CH0, FLASH, LPWR, RNG, SHA, WIFI},
+    peripherals::{ADC1, AES, DMA_CH0, FLASH, LPWR, RNG, RSA, SHA, WIFI},
     rng::TrngSource,
+    rsa::{RsaBackend, RsaWorkQueueDriver},
     rtc_cntl::Rtc,
     sha::{ShaBackend, ShaWorkQueueDriver},
 };
@@ -248,6 +249,7 @@ pub struct ChiyocorePeripheralSet {
     pub sha: ShaDriver<'static>,
     pub aes: AesDriver<'static>,
     pub trng: TrngSource<'static>,
+    pub rsa: RsaDriver<'static>,
     pub flash: Arc<NonReentrantMutex<FlashStorage<'static>>>,
 }
 
@@ -261,6 +263,7 @@ impl ChiyocorePeripheralSet {
             adc,
             flash,
             dma,
+            rsa,
         }: ChiyocorePeripherals,
     ) -> Self {
         ChiyocorePeripheralSet {
@@ -279,6 +282,11 @@ impl ChiyocorePeripheralSet {
             flash: Arc::new(NonReentrantMutex::new(
                 FlashStorage::new(flash).multicore_auto_park(),
             )),
+            rsa: RsaDriverBuilder {
+                rsa: RsaBackend::new(rsa),
+                wq_builder: |rsa| rsa.start(),
+            }
+            .build(),
         }
     }
 }
@@ -291,6 +299,7 @@ pub struct ChiyocorePeripherals {
     pub adc: ADC1<'static>,
     pub flash: FLASH<'static>,
     pub dma: DMA_CH0<'static>,
+    pub rsa: RSA<'static>,
 }
 
 #[self_referencing]
@@ -307,6 +316,14 @@ pub struct ShaDriver<'a> {
     #[borrows(mut sha)]
     #[not_covariant]
     pub wq: ShaWorkQueueDriver<'this, 'a>,
+}
+
+#[self_referencing]
+pub struct RsaDriver<'a> {
+    pub rsa: RsaBackend<'a>,
+    #[borrows(mut rsa)]
+    #[not_covariant]
+    pub wq: RsaWorkQueueDriver<'this, 'a>,
 }
 
 macro_rules! impl_chiyocore_layer_tuple {

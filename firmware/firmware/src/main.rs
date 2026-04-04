@@ -5,6 +5,7 @@ extern crate alloc;
 
 use alloc::sync::Arc;
 use chiyocore::builder::{Chiyocore, ChiyocorePeripherals, ChiyocoreSetupData};
+use chiyocore::meshcore;
 use embassy_executor::Spawner;
 
 use chiyocore::simple_mesh::storage::channel::Channel;
@@ -20,11 +21,11 @@ use litemap::LiteMap;
 // use chiyocore::handler::{BasicHandlerManager, ContactManager, HandlerStorage};
 use alloc::borrow::Cow;
 use chiyocore::builder::{BuildChiyocoreLayer, BuildChiyocoreSet, ChiyocoreNode};
+use chiyocore::static_cell::StaticCell;
 use chiyocore::storage::SimpleFileDb;
 use core::ffi::CStr;
 use meshcore::identity::LocalIdentity;
 use smol_str::SmolStr;
-use static_cell::StaticCell;
 esp_bootloader_esp_idf::esp_app_desc!();
 
 async fn load_node_slot<const FS_SIZE: usize, T: chiyocore::builder::BuildChiyocoreLayer>(
@@ -48,13 +49,11 @@ async fn load_node_slot<const FS_SIZE: usize, T: chiyocore::builder::BuildChiyoc
 #[embassy_executor::task]
 async fn run_handler(
     chiyocore: Chiyocore<
-        <(
-            ChiyocoreNode<(
-                chiyocore_companion::companionv2::Companion,
-                chiyocore::ping_bot::PingBot,
-            )>,
-            ChiyocoreNode<chiyocore_companion::companionv2::Companion>,
-        ) as BuildChiyocoreSet>::Output,
+        <ChiyocoreNode<(
+            chiyocore_companion::companionv2::Companion,
+            chiyocore::ping_bot::PingBot,
+            chiyocore_ttc::TTCBot,
+        )> as BuildChiyocoreSet>::Output,
         (),
     >,
 ) {
@@ -88,6 +87,7 @@ async fn main(spawner: Spawner) -> ! {
             adc: peripherals.ADC1,
             dma: peripherals.DMA_CH0,
             flash: peripherals.FLASH,
+            rsa: peripherals.RSA,
         },
         chiyocore::lora::LoraPinBundle {
             sclk: peripherals.GPIO7,
@@ -168,35 +168,25 @@ async fn main(spawner: Spawner) -> ! {
     let chiyocore = chiyocore
         .add_node(
             &spawner,
-            (
-                load_node_slot::<
-                    _,
-                    (
-                        chiyocore_companion::companionv2::Companion,
-                        chiyocore::ping_bot::PingBot,
-                    ),
-                >(c"chiyo0", &slot_db)
-                .await,
-                load_node_slot::<_, chiyocore_companion::companionv2::Companion>(
-                    c"chiyo1", &slot_db,
-                )
-                .await,
-            ),
-            &(
+            load_node_slot::<
+                _,
                 (
-                    chiyocore_config::CompanionConfig {
-                        id: Cow::Borrowed("companion-0"),
-                        tcp_port: 5000,
-                    },
-                    chiyocore_config::PingBotConfig {
-                        name: Cow::Borrowed("cafe / chiyobot 🌃☕"),
-                        channels: Cow::Owned(["#test".into(), "#emitestcorner".into()].into()),
-                    },
+                    chiyocore_companion::companionv2::Companion,
+                    chiyocore::ping_bot::PingBot,
+                    chiyocore_ttc::TTCBot,
                 ),
-                (chiyocore_config::CompanionConfig {
-                    id: Cow::Borrowed("companion-1"),
-                    tcp_port: 3000,
-                }),
+            >(c"chiyo0", &slot_db)
+            .await,
+            &(
+                chiyocore_config::CompanionConfig {
+                    id: Cow::Borrowed("companion-0"),
+                    tcp_port: 5000,
+                },
+                chiyocore_config::PingBotConfig {
+                    name: Cow::Borrowed("cafe / chiyobot 🌃☕"),
+                    channels: Cow::Owned(["#test".into(), "#emitestcorner".into()].into()),
+                },
+                (),
             ),
         )
         .await;

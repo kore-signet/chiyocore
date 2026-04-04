@@ -10,7 +10,7 @@ use crate::companion_protocol::protocol::{CompanionSer, CompanionSink};
 use crate::companionv2::Companion;
 // use crate::ping_bot::PingBot;
 use crate::companion_protocol;
-use chiyocore::EspMutex;
+use chiyocore::{EspMutex, meshcore};
 
 // pub static TCP_COMPANION_CHANNEL: StaticChannel<SmallVec<[u8; 256]>, 2> = StaticChannel::new();
 

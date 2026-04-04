@@ -1,10 +1,11 @@
 use alloc::string::String;
-use chiyocore::simple_mesh::storage::contact::Contact;
-use meshcore::{
+use chiyocore::meshcore;
+use chiyocore::meshcore::{
     DecodeError, DecodeResult, Path, PathHashMode,
     io::{SliceWriter, TinyReadExt},
     payloads::TextType,
 };
+use chiyocore::simple_mesh::storage::contact::Contact;
 use modular_bitfield::Specifier as _;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
@@ -20,11 +21,11 @@ pub trait CompanionSer {
 pub mod responses {
     use alloc::borrow::Cow;
 
+    use chiyocore::PacketStatus;
     pub use chiyocore::simple_mesh::MsgSent;
     use chiyocore::simple_mesh::packet_log::{ChannelMsgRecv, ContactMsgRecv, SavedMessage};
     use chiyocore::simple_mesh::storage::contact::Contact;
-    use chiyocore::{CompanionError, FirmwareError};
-    use lora_phy::mod_params::PacketStatus;
+    use chiyocore::{CompanionError, FirmwareError, meshcore};
     use meshcore::Path;
     use meshcore::io::SliceWriter;
     use meshcore::payloads::AppdataFlags;
@@ -1132,7 +1133,10 @@ pub async fn parse_packet(
         }
         ShareContact => todo!(),
         ExportContact => todo!(),
-        ImportContact => todo!(),
+        ImportContact => {
+            out.write_packet(&handler.import_contact(packet).await)
+                .await;
+        }
         Reboot => todo!(),
         GetBatteryVoltage => {
             out.write_packet(&handler.get_battery().await).await;
@@ -1396,4 +1400,9 @@ pub trait CompanionHandler {
         pub_key: &[u8; 32],
         data: &[u8],
     ) -> impl Future<Output = CompanionProtoResult<chiyocore::simple_mesh::MsgSent>>;
+
+    fn import_contact(
+        &mut self,
+        data: &[u8],
+    ) -> impl Future<Output = CompanionProtoResult<responses::Ok>>;
 }

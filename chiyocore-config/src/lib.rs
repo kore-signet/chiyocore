@@ -35,6 +35,7 @@ pub struct Node {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum LayerConfig {
+    TTCBot,
     PingBot(PingBotConfig),
     Companion(CompanionConfig),
 }
@@ -42,6 +43,7 @@ pub enum LayerConfig {
 impl LayerConfig {
     pub fn kind(&self) -> &'static str {
         match self {
+            LayerConfig::TTCBot => "chiyocore_ttc::TTCBot",
             LayerConfig::PingBot(_) => "chiyocore::ping_bot::PingBot",
             LayerConfig::Companion(_) => "chiyocore_companion::companionv2::Companion",
         }

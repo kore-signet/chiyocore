@@ -5,6 +5,7 @@
         extern crate alloc;
 
         use alloc::sync::Arc;
+        use chiyocore::meshcore;
         use chiyocore::builder::{Chiyocore, ChiyocorePeripherals, ChiyocoreSetupData};
         use chiyocore::ping_bot::PingBot;
         use chiyocore_companion::companionv2::{Companion};
@@ -27,6 +28,6 @@
         use chiyocore::simple_mesh::MeshLayerGet;
         use meshcore::identity::LocalIdentity;
         use smol_str::SmolStr;
-        use static_cell::StaticCell;
+        use chiyocore::static_cell::StaticCell;
         use core::ffi::CStr;
         use alloc::borrow::Cow;

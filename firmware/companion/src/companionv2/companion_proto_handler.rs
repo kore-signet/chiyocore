@@ -1,4 +1,4 @@
-use alloc::borrow::Cow;
+use alloc::{borrow::Cow, string::String};
 use ed25519_compact::Noise;
 use esp_hal::rng::Trng;
 use meshcore::{
@@ -22,6 +22,7 @@ use crate::{
 };
 use chiyocore::{
     lora::LORA_FREQUENCY_IN_HZ,
+    meshcore,
     simple_mesh::{
         packet_log::SavedMessage,
         storage::{channel::Channel, contact::Contact},
@@ -158,7 +159,7 @@ impl CompanionHandler for Companion {
         self.mesh
             .read()
             .await
-            .send_direct_message(&contact.as_identity(), contact.path.clone(), text)
+            .send_direct_message(&contact.as_identity(), contact.path.clone(), text, None)
             .await
             .map_err(|e| e.into())
     }
@@ -482,6 +483,7 @@ impl CompanionHandler for Companion {
                     time,
                     data: data.into(),
                 },
+                None,
             )
             .await?;
 
@@ -518,5 +520,37 @@ impl CompanionHandler for Companion {
             expected_ack: req.time.to_le_bytes(),
             suggested_timeout: msg_timeout.as_millis() as u32,
         })
+    }
+
+    async fn import_contact(&mut self, data: &[u8]) -> CompanionProtoResult<responses::Ok> {
+        let payload = Advert::decode(data).map_err(|_| responses::Err { code: None })?;
+        let Some(appdata) = payload.appdata.as_ref() else {
+            return Err(responses::Err { code: None });
+        };
+
+        let Some(name) = appdata
+            .name
+            .as_ref()
+            .and_then(|v| core::str::from_utf8(v).ok())
+        else {
+            return Err(responses::Err { code: None });
+        };
+
+        self.storage
+            .contacts
+            .write()
+            .await
+            .insert(Contact {
+                key: payload.public_key,
+                name: String::from(name),
+                path_to: None,
+                flags: appdata.flags.bits(),
+                latitude: appdata.latitude.unwrap_or(0),
+                longitude: appdata.longitude.unwrap_or(0),
+                last_heard: (self.rtc.current_time_us() / 1_000_000) as u32,
+            })
+            .await?;
+
+        Ok(responses::Ok { code: None })
     }
 }

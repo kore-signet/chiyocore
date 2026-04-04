@@ -44,7 +44,7 @@ pub async fn ntp_task(stack: embassy_net::Stack<'static>, rtc: Arc<Rtc<'static>>
     loop {
         'inner: loop {
             let res =
-                embassy_time::with_timeout(Duration::from_millis(1000), ntp_once(stack, &rtc))
+                embassy_time::with_timeout(Duration::from_millis(5000), ntp_once(stack, &rtc))
                     .await;
             if res.is_ok() {
                 break 'inner;

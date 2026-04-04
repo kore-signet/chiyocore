@@ -2,6 +2,7 @@ use alloc::sync::Arc;
 use chiyocore::{
     EspMutex,
     builder::BuildChiyocoreLayer,
+    meshcore,
     simple_mesh::storage::channel::{Channel, ChannelStorage},
 };
 use meshcore::crypto::ChannelKeys;

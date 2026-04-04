@@ -17,7 +17,9 @@ pub mod storage;
 pub mod timing;
 pub mod wifi;
 
+use embassy_sync::watch::Watch;
 pub use lora_phy::mod_params::PacketStatus;
+pub use meshcore;
 
 use core::fmt::Debug;
 
@@ -38,6 +40,9 @@ extern crate alloc;
 pub type EspMutex<T> = embassy_sync::mutex::Mutex<esp_sync::RawMutex, T>;
 pub type SyncEspMutex<T> = esp_sync::NonReentrantMutex<T>;
 pub type BumpaloVec<'a, T> = bumpalo::collections::Vec<'a, T>;
+pub type EspWatch<T, const N: usize> = Watch<esp_sync::RawMutex, T, N>;
+
+pub use static_cell;
 
 #[derive(Debug)]
 pub enum FirmwareError {
@@ -92,7 +97,8 @@ pub trait MeshcoreHandler {
 #[macro_export]
 macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
-        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        static STATIC_CELL: $crate::static_cell::StaticCell<$t> =
+            $crate::static_cell::StaticCell::new();
         #[deny(unused_attributes)]
         let x = STATIC_CELL.uninit().write($val);
         x

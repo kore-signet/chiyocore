@@ -71,8 +71,8 @@ pub async fn wifi_init(
         wifi_interface,
         embassy_net_config,
         mk_static!(
-            embassy_net::StackResources<6>,
-            embassy_net::StackResources::<6>::new()
+            embassy_net::StackResources<8>,
+            embassy_net::StackResources::<8>::new()
         ),
         seed,
     );

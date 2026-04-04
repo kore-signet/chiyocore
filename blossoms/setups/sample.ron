@@ -23,17 +23,18 @@ ChiyocoreConfig(
             "#test",
             "#emitestcorner"
           ]
-        )
+        ),
+        TTCBot
       ]
     ),
-    Node(
-      id: "chiyo1",
-      layers: [
-        Companion(
-          id: "companion-1",
-          tcp_port: 3000
-        )
-      ]
-    )
+    // Node(
+    //   id: "chiyo1",
+    //   layers: [
+    //     Companion(
+    //       id: "companion-1",
+    //       tcp_port: 3000
+    //     )
+    //   ]
+    // )
   ]
 )

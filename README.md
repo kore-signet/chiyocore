@@ -72,3 +72,11 @@ with meshcore-cli:
 
 ## why chiyocore?
 [i think sakura chiyono o is neat](https://www.youtube.com/watch?v=e3YcYLE90po)
+
+## todos & random thoughts
+- more radio support!!
+- partition tables need to be configurable
+- is packet delaying logic correct?
+- need a reorg/cleanup pass
+- stack usage could likely be improved
+- currently, the firmware builder & runtime crates all depend on a shared config crate. this creates a little bit of lock-in that i don't love
