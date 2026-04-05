@@ -12,21 +12,6 @@ use crate::{
     simple_mesh::storage::{channel::Channel, contact::CachedContact},
 };
 
-// use crate::companion::handler::message_log::HashableMessage;
-
-impl<'a> HashableMessage for Packet<'a> {
-    async fn hash_into(&self, hasher: &mut Sha1Context, out: &mut [u8; 20]) {
-        hasher.update(&self.header.into_bytes()).wait().await;
-        hasher.update(&self.payload).wait().await;
-
-        if self.header.payload_type() == PayloadType::Trace {
-            hasher.update(self.path.raw_bytes()).wait().await;
-        }
-
-        hasher.finalize(out).wait().await;
-    }
-}
-
 pub struct HashLog<const CAPACITY: usize> {
     log: EspMutex<heapless::Deque<[u8; 20], CAPACITY>>,
 }
@@ -73,6 +58,8 @@ impl<const CAPACITY: usize> HashLog<CAPACITY> {
     }
 }
 
+/// A HashableMessage can be hashed with SHA1 to help deduplicate received packets.
+/// **NOTE:** only information that is the same across duplicates should be hashed! e.g, the same packet but received through different paths ***should*** have the same hash.
 pub trait HashableMessage {
     fn hash(&self) -> impl core::future::Future<Output = [u8; 20]> {
         async {
@@ -90,6 +77,20 @@ pub trait HashableMessage {
     ) -> impl core::future::Future<Output = ()>;
 }
 
+impl<'a> HashableMessage for Packet<'a> {
+    async fn hash_into(&self, hasher: &mut Sha1Context, out: &mut [u8; 20]) {
+        hasher.update(&self.header.into_bytes()).wait().await;
+        hasher.update(&self.payload).wait().await;
+
+        if self.header.payload_type() == PayloadType::Trace {
+            hasher.update(self.path.raw_bytes()).wait().await;
+        }
+
+        hasher.finalize(out).wait().await;
+    }
+}
+
+/// The data we use to dedup channel messages.
 pub struct HashableChannelMessage<'a> {
     pub idx: u8,
     pub timestamp: u32,
@@ -115,6 +116,7 @@ impl<'a> HashableMessage for HashableChannelMessage<'a> {
     }
 }
 
+/// The data to dedupe contact messages.
 pub struct HashableContactMessage<'a> {
     pub pk_prefix: &'a [u8; 6],
     pub timestamp: u32,
@@ -173,6 +175,7 @@ pub fn trim_slice_nils(data: &[u8]) -> &[u8] {
     bytes
 }
 
+/// A saved message, containing just the info we need for retrieving messages (e.g, no full paths, only how many hops)
 #[derive(Serialize, Deserialize, Debug)]
 pub enum SavedMessage<'a> {
     Contact(ContactMsgRecv<'a>),
@@ -214,6 +217,7 @@ impl<'a> SavedMessage<'a> {
     }
 }
 
+/// A saved direct message.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ContactMsgRecv<'a> {
     pub snr: i8,
@@ -251,6 +255,7 @@ impl<'a> ContactMsgRecv<'a> {
     }
 }
 
+/// A saved group message.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ChannelMsgRecv<'a> {
     pub snr: i8,

@@ -12,10 +12,12 @@ use littlefs2::{consts::U256, fs::Filesystem, path::Path};
 use ouroboros::self_referencing;
 use serde::{Serialize, de::DeserializeOwned};
 
+/// Size of the main data fs.
 pub const FS_SIZE: usize = partition_table::MESHCORE_DATA.size as usize;
 
 use crate::{EspMutex, FirmwareError, FirmwareResult, partition_table};
 
+/// A single flash partition, backed by a shared/locked reference to the flash driver.
 pub struct FsPartition<const SIZE: usize> {
     pub storage: Arc<esp_sync::NonReentrantMutex<FlashStorage<'static>>>,
     pub partition_offset: usize,
@@ -189,6 +191,7 @@ impl<const SIZE: usize> embedded_storage::nor_flash::NorFlash for FsPartition<SI
 
 impl<const SIZE: usize> embedded_storage::nor_flash::MultiwriteNorFlash for FsPartition<SIZE> {}
 
+/// A Littlefs2 filesystem, alongside its backing partition.
 #[self_referencing]
 pub struct ActiveFilesystem<const SIZE: usize> {
     pub partition: FsPartition<SIZE>,
@@ -218,198 +221,8 @@ impl<const SIZE: usize> ActiveFilesystem<SIZE> {
     }
 }
 
-// pub type ThreadSafeFS = Arc<EspMutex<ActiveFilesystem<SIZE>>>;
-
-pub trait FileDbKey: Eq + Ord + Copy + core::fmt::Debug {
-    fn encode(&self, out: &mut String);
-    fn prefix_matches(&self, prefix: &[u8]) -> bool;
-    fn prefix_cmp(&self, prefix: &[u8]) -> core::cmp::Ordering;
-}
-
-impl FileDbKey for u8 {
-    fn encode(&self, out: &mut String) {
-        out.push_str(&self.to_string())
-    }
-
-    fn prefix_matches(&self, prefix: &[u8]) -> bool {
-        *self == prefix[0]
-    }
-
-    fn prefix_cmp(&self, prefix: &[u8]) -> core::cmp::Ordering {
-        [*self][..].cmp(prefix)
-    }
-}
-
-impl<const N: usize> FileDbKey for [u8; N] {
-    fn encode(&self, out: &mut String) {
-        BASE64_URL_SAFE.encode_string(self, out);
-    }
-
-    fn prefix_matches(&self, prefix: &[u8]) -> bool {
-        self.starts_with(prefix)
-    }
-
-    fn prefix_cmp(&self, prefix: &[u8]) -> core::cmp::Ordering {
-        self[..].cmp(prefix)
-    }
-}
-
-pub trait Cacheable: Serialize + DeserializeOwned {
-    type Key: FileDbKey;
-    type Cached: CachedVersion<Self::Key>;
-    // type Key= [u8; N];
-
-    fn key(&self) -> &Self::Key;
-    fn as_cached(&self) -> Self::Cached;
-}
-
-pub trait CachedVersion<K: FileDbKey> {
-    fn key(&self) -> &K;
-    fn size(&self) -> usize;
-}
-
-pub struct CachedFileDb<const SIZE: usize, T: Cacheable> {
-    prefix: &'static littlefs2::path::Path,
-    fs: Arc<EspMutex<ActiveFilesystem<SIZE>>>,
-    pub cache: Vec<T::Cached>,
-}
-
-impl<T: Cacheable, const SIZE: usize> CachedFileDb<SIZE, T> {
-    pub async fn init(
-        fs_handle: Arc<EspMutex<ActiveFilesystem<SIZE>>>,
-        prefix: &'static littlefs2::path::Path,
-    ) -> Self {
-        let mut fs = fs_handle.lock().await;
-        // fs.lock().await.read_dir(path).unwrap();
-
-        // let prefix = littlefs2::path::Path::from_
-
-        let cache = fs.with_fs_mut(|fs| {
-            let _ = fs.create_dir_all(prefix);
-            fs.read_dir_and_then(prefix, |dir| {
-                let mut cache = Vec::new();
-                let mut scratch = heapless::Vec::<u8, 512>::new();
-
-                for entry in dir {
-                    let entry = entry.unwrap();
-                    if entry.metadata().is_dir() {
-                        continue;
-                    }
-
-                    let data: T = fs
-                        .open_file_and_then(entry.path(), |f| {
-                            scratch.clear();
-                            f.read_to_end(&mut scratch).unwrap();
-
-                            Ok(postcard::from_bytes(&scratch).unwrap())
-                        })
-                        .unwrap();
-
-                    cache.push(data.as_cached());
-                }
-
-                cache.sort_unstable_by_key(|v| *v.key());
-                cache.shrink_to_fit();
-                Ok(cache)
-            })
-            .unwrap()
-        });
-
-        drop(fs);
-
-        CachedFileDb {
-            prefix,
-            fs: fs_handle,
-            cache,
-        }
-    }
-
-    fn path(&self, k: &T::Key) -> littlefs2::path::PathBuf {
-        let mut path = String::new();
-        k.encode(&mut path);
-        path.push('\x00');
-
-        self.prefix.join(Path::from_str_with_nul(&path).unwrap())
-    }
-
-    fn find_by_prefix(&self, prefix: &[u8]) -> Option<&T::Cached> {
-        match self.cache.binary_search_by(|a| a.key().prefix_cmp(prefix)) {
-            Ok(idx) => Some(&self.cache[idx]),
-            Err(idx) => {
-                let v = &self
-                    .cache
-                    .get(core::cmp::min(self.cache.len().saturating_sub(1), idx))?;
-                if v.key().prefix_matches(prefix) {
-                    Some(v)
-                } else {
-                    None
-                }
-            }
-        }
-    }
-
-    pub fn get_cached(&self, prefix: &[u8]) -> Option<&T::Cached> {
-        self.find_by_prefix(prefix)
-        // self.cache
-        // .iter()
-        // .find(|v| v.key().prefix_matches(prefix))
-        // .map(|v| v);
-
-        // self.cache.iter().find(|v| v.key().prefix_matches(prefix))
-    }
-
-    pub fn contains(&self, prefix: &[u8]) -> bool {
-        self.find_by_prefix(prefix).is_some()
-        // self.cache.iter().any(|v| v.key().prefix_matches(prefix))
-        // self.cache.iter().any(|(k, _)| k.prefix_matches(prefix))
-    }
-
-    pub async fn get_full(&self, key: &T::Key) -> FirmwareResult<Option<T>> {
-        let path = self.path(key);
-        let res = self.fs.lock().await.with_fs_mut(|fs| fs.read::<512>(&path));
-
-        match res {
-            Ok(v) => Ok(Some(postcard::from_bytes(&v)?)),
-            Err(littlefs2::io::Error::NO_SUCH_ENTRY) => Ok(None),
-            Err(e) => Err(e.into()),
-        }
-    }
-
-    pub async fn insert(&mut self, entry: &T) -> FirmwareResult<()> {
-        let path = self.path(entry.key());
-        let entry_data = postcard::to_allocvec(entry)?;
-
-        self.fs
-            .lock()
-            .await
-            .with_fs_mut(|fs| fs.write(&path, &entry_data))?;
-
-        match self.cache.binary_search_by(|a| entry.key().cmp(a.key())) {
-            Ok(idx) => self.cache[idx] = entry.as_cached(),
-            Err(idx) => self.cache.insert(idx, entry.as_cached()),
-        }
-
-        Ok(())
-    }
-
-    pub async fn delete(&mut self, key: &T::Key) -> FirmwareResult<()> {
-        let Ok(pos) = self.cache.binary_search_by(|a| key.cmp(a.key())) else {
-            return Ok(());
-        };
-
-        self.cache.remove(pos);
-
-        let path = self.path(key);
-        self.fs.lock().await.with_fs_mut(|fs| fs.remove(&path))?;
-
-        Ok(())
-    }
-
-    pub fn cache_size(&self) -> usize {
-        self.cache.iter().map(|v| v.size()).sum()
-    }
-}
-
+/// A flash-stored, key-value database, using serde-deserializable values and byte keys.
+/// Each key is stored as a single file under a specified prefix.
 #[derive(Clone)]
 pub struct SimpleFileDb<const SIZE: usize> {
     fs: Arc<EspMutex<ActiveFilesystem<SIZE>>>,
@@ -518,6 +331,7 @@ impl<const SIZE: usize> SimpleFileDb<SIZE> {
     }
 }
 
+/// An object backed by an underlying SimpleFileDb (useful for, e.g, keeping a configuration value both in-memory and on-flash)
 pub struct PersistedObject<T: Serialize + DeserializeOwned + Default, const SIZE: usize> {
     pub key: &'static CStr,
     data: T,
@@ -535,12 +349,14 @@ impl<T: Serialize + DeserializeOwned + Default, const SIZE: usize> Deref
 }
 
 impl<T: Serialize + DeserializeOwned + Default, const SIZE: usize> PersistedObject<T, SIZE> {
+    /// Sync a new value to flash.
     pub async fn set(&mut self, new_val: T) -> FirmwareResult<()> {
         self.db.insert(self.key, &new_val).await?;
         self.data = new_val;
         Ok(())
     }
 
+    /// Mutate the stored data, and sync it to flash.
     pub async fn with_mut(&mut self, f: impl FnOnce(&mut T)) -> FirmwareResult<()> {
         f(&mut self.data);
         self.db.insert(self.key, &self.data).await?;

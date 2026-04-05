@@ -65,7 +65,7 @@ impl SimpleMeshLayer for PingBot {
                 (self.rtc.current_time_us() / 1_000_000) as u32,
                 message.as_bytes(),
             );
-            let delay = crate::timing::rx_retransmit_delay(packet);
+            let delay = crate::timing::rx_retransmit_delay(packet) * 2;
             mesh.send_channel_message(&channel.as_keys(), &message, Some(delay))
                 .await?;
         }
@@ -178,71 +178,3 @@ impl BuildChiyocoreLayer for PingBot {
         })))
     }
 }
-
-// use esp_println::println;
-// use lora_phy::mod_params::PacketStatus;
-// use meshcore::{Packet, payloads::TextMessageData};
-
-// use crate::companion::handler::{
-//     CompanionLayer,
-//     simple_companion::{CompanionResult, SimpleCompanion},
-//     storage::Channel,
-// };
-
-// impl CompanionLayer for PingBot {
-//     async fn channel_message(
-//         &self,
-//         scratch: &bumpalo::Bump,
-//         channel: &Channel,
-//         (packet, packet_status): (&Packet<'_>, PacketStatus),
-//         text: &TextMessageData<'_>,
-//         handler: &SimpleCompanion<impl CompanionLayer + Send>,
-//     ) -> CompanionResult<()> {
-//         if !(channel.name == "#test" || channel.name == "#emitestcorner") {
-//             return Ok(());
-//         }
-
-//         let message = text.as_utf8().unwrap().trim_end_matches('\0');
-//         let Some((username, msg)) = message.split_once(':') else {
-//             return Ok(());
-//         };
-
-//         if msg.trim() == "!ping" {
-//             let delay = (handler.rtc.current_time_us() / 1_000_000) as i32 - text.timestamp as i32;
-
-//             let ping_message = bumpalo::format!(in scratch, "cafe / chiyobot 🌃☕: pong @[{}] ＼(≧▽≦)／\npath: {:?}\nsnr {} db | rssi {} dBm\ndelay: {delay}s", username, packet.path, packet_status.snr, packet_status.rssi);
-
-//             handler
-//                 .send_to_channel(scratch, channel.idx, &ping_message, None)
-//                 .await?;
-//         }
-
-//         Ok(())
-//     }
-
-//     async fn contact_message(
-//         &self,
-//         scratch: &bumpalo::Bump,
-//         contact: &crate::companion::handler::storage::Contact,
-//         packet: (&Packet<'_>, PacketStatus),
-//         text: &TextMessageData<'_>,
-//         handler: &SimpleCompanion<impl CompanionLayer + Send>,
-//     ) -> CompanionResult<()>
-//     where
-//         Self: Send + Sized,
-//     {
-//         Ok(())
-//     }
-
-//     async fn packet(
-//         &self,
-//         scratch: &bumpalo::Bump,
-//         packet: (&Packet<'_>, PacketStatus),
-//         handler: &SimpleCompanion<impl CompanionLayer + Send>,
-//     ) -> CompanionResult<()>
-//     where
-//         Self: Send + Sized,
-//     {
-//         Ok(())
-//     }
-// }

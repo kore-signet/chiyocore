@@ -3,6 +3,8 @@ use embassy_sync::rwlock::RwLock;
 
 pub mod channel;
 pub mod contact;
+pub mod message_log;
+pub mod packet_log;
 pub mod shared_key_cache;
 
 use crate::{

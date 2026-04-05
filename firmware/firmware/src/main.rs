@@ -6,6 +6,8 @@ extern crate alloc;
 use alloc::sync::Arc;
 use chiyocore::builder::{Chiyocore, ChiyocorePeripherals, ChiyocoreSetupData};
 use chiyocore::meshcore;
+use chiyocore::ping_bot::PingBot;
+use chiyocore_companion::companionv2::Companion;
 use embassy_executor::Spawner;
 
 use chiyocore::simple_mesh::storage::channel::Channel;
@@ -21,8 +23,10 @@ use litemap::LiteMap;
 // use chiyocore::handler::{BasicHandlerManager, ContactManager, HandlerStorage};
 use alloc::borrow::Cow;
 use chiyocore::builder::{BuildChiyocoreLayer, BuildChiyocoreSet, ChiyocoreNode};
+use chiyocore::simple_mesh::MeshLayerGet;
 use chiyocore::static_cell::StaticCell;
 use chiyocore::storage::SimpleFileDb;
+use chiyocore::EspMutex;
 use core::ffi::CStr;
 use meshcore::identity::LocalIdentity;
 use smol_str::SmolStr;
@@ -49,11 +53,11 @@ async fn load_node_slot<const FS_SIZE: usize, T: chiyocore::builder::BuildChiyoc
 #[embassy_executor::task]
 async fn run_handler(
     chiyocore: Chiyocore<
-        <ChiyocoreNode<(
+        <(ChiyocoreNode<(
             chiyocore_companion::companionv2::Companion,
             chiyocore::ping_bot::PingBot,
             chiyocore_ttc::TTCBot,
-        )> as BuildChiyocoreSet>::Output,
+        )>) as BuildChiyocoreSet>::Output,
         (),
     >,
 ) {
@@ -168,7 +172,7 @@ async fn main(spawner: Spawner) -> ! {
     let chiyocore = chiyocore
         .add_node(
             &spawner,
-            load_node_slot::<
+            (load_node_slot::<
                 _,
                 (
                     chiyocore_companion::companionv2::Companion,
@@ -176,8 +180,8 @@ async fn main(spawner: Spawner) -> ! {
                     chiyocore_ttc::TTCBot,
                 ),
             >(c"chiyo0", &slot_db)
-            .await,
-            &(
+            .await),
+            &((
                 chiyocore_config::CompanionConfig {
                     id: Cow::Borrowed("companion-0"),
                     tcp_port: 5000,
@@ -187,7 +191,7 @@ async fn main(spawner: Spawner) -> ! {
                     channels: Cow::Owned(["#test".into(), "#emitestcorner".into()].into()),
                 },
                 (),
-            ),
+            )),
         )
         .await;
 

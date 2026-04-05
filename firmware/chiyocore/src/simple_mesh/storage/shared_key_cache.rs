@@ -6,6 +6,7 @@ use meshcore::identity::{ForeignIdentity, LocalIdentity};
 
 use crate::psram_vec::PSRAMVec;
 
+/// Cache for shared keys between a specific x25519 identity and other contacts.
 #[derive(Clone)]
 pub struct SharedKeyCache {
     // TODO: for now, this grows unbounded. we really don't want that for long-running nodes; impl eviction

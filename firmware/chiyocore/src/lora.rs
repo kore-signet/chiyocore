@@ -23,11 +23,13 @@ use crate::{
     simple_mesh::{MeshLayerGet, SimpleMesh, SimpleMeshLayer, WithLayer},
 };
 
+/// LoRa freq (currently hardcoded.)
 pub const LORA_FREQUENCY_IN_HZ: u32 = 910_525_000; // WARNING: Set this appropriately for the region
 
 static SPI_BUS: StaticCell<EspMutex<esp_hal::spi::master::Spi<'static, esp_hal::Async>>> =
     StaticCell::new();
 
+/// Sx1262 radio (type alias for lora_phy)
 pub type Sx1262Radio<'a> = lora_phy::sx126x::Sx126x<
     embassy_embedded_hal::shared_bus::asynch::spi::SpiDevice<
         'a,
@@ -42,6 +44,7 @@ pub type Sx1262Radio<'a> = lora_phy::sx126x::Sx126x<
     lora_phy::sx126x::Sx1262,
 >;
 
+/// Any object that can produce a static/owned bundle of the required pins to drive a LoRa radio (alongside an SPI driver)
 pub trait LoraPins {
     type Sclk: OutputPin + 'static;
     type Mosi: OutputPin + 'static;
@@ -68,6 +71,7 @@ pub trait LoraPins {
     >;
 }
 
+/// Bundle of pins required to drive an SPI LoRa radio, alongside an SPI driver
 pub struct LoraPinBundle<
     SCLK: OutputPin + 'static,
     MOSI: OutputPin + 'static,
@@ -129,7 +133,7 @@ impl<
     }
 }
 
-// what a type signature huh
+/// Create and initialize a LoRa radio from a set of pins.
 pub async fn lora_init<T: LoraPins>(
     pins: T,
 ) -> lora_phy::LoRa<Sx1262Radio<'static>, embassy_time::Delay> {
@@ -196,6 +200,7 @@ pub async fn lora_init<T: LoraPins>(
     .unwrap()
 }
 
+/// An active radio with set modulation parameters
 pub struct Radio {
     lora: LoRa<Sx1262Radio<'static>, embassy_time::Delay>,
     modulation_params: ModulationParams,
@@ -271,6 +276,7 @@ impl Radio {
         Ok(())
     }
 
+    /// Loop receiving messages, as well as sending when needed (to_send)
     async fn run(
         &mut self,
         received_tx: &mut thingbuf::mpsc::StaticSender<DataWithSnr, DefaultRecycle>,
@@ -361,24 +367,6 @@ pub async fn lora_task(
 static LORA_TRANSMIT_CHANNEL: StaticChannel<heapless::Vec<u8, 256>, 16> = StaticChannel::new();
 static LORA_RECEIVE_CHANNEL: StaticChannel<DataWithSnr, 16> = StaticChannel::new();
 
-// trait Hack<'a, I: 'a, R>: FnOnce(&'a I) -> Self::Fut {
-//     type Fut: Future<Output = R>;
-// }
-
-// impl<'a, I: 'a, R, F, Fut> Hack<'a, I, R> for F
-// where
-//     F: FnOnce(&'a I) -> Fut,
-//     Fut: Future<Output = R> + 'a,
-// {
-//     type Fut = Fut;
-// }
-
-// async fn wrapper<L: MeshLayerGet, F>(func: F) -> () where
-//     F: for<'a> Hack<'a, L::Layer<'a>, ()>,
-// {
-//     func(&i).await
-// }
-
 #[embassy_executor::task(pool_size = 16)]
 async fn send_delayed(
     tx: thingbuf::mpsc::StaticSender<heapless::Vec<u8, 256>>,
@@ -393,6 +381,7 @@ async fn send_delayed(
     drop(slot);
 }
 
+/// Handle to transmit raw byte packets to be sent by the running LoRa radio.
 #[derive(Clone)]
 pub struct LoraTaskChannel {
     // scratch: [u8; 256],
@@ -400,6 +389,7 @@ pub struct LoraTaskChannel {
 }
 
 impl LoraTaskChannel {
+    /// Start LoRa receive/transmit task.
     pub fn start_lora(
         lora: LoRa<Sx1262Radio<'static>, embassy_time::Delay>,
         spawner: &embassy_executor::Spawner,
@@ -424,6 +414,7 @@ impl LoraTaskChannel {
         )
     }
 
+    /// Run the specified set of handlers using the passed receive channel handle.
     pub async fn run_handler<L: TaskChannelHandler>(
         self,
         rx: thingbuf::mpsc::StaticReceiver<DataWithSnr, DefaultRecycle>,
@@ -554,6 +545,7 @@ impl<'a, 'b, 'h> WithLayer for PacketContext<'a, 'b, 'h> {
     }
 }
 
+/// A handler (or set of handlers) that can handle packets as they're recieved.
 pub trait TaskChannelHandler {
     fn run<'b>(
         &self,
@@ -615,65 +607,3 @@ impl_mesh_layer_tuple!(
     embassy_futures::join::join5;
     A,B,C,D,E
 );
-
-// impl<L: Mesh ()
-// trait LayeredHandler {
-//     // type Layers: MeshLayerGet;
-
-//     async fn receive(&self) {
-//           struct PacketContext<'a, 'b, 'h> {
-//             packet: &'a Packet<'b>,
-//             packet_status: PacketStatus,
-//             bytes: &'b [u8],
-//             handler: &'h Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
-//         }
-
-//         impl<'a, 'b, 'h> WithLayer for PacketContext<'a, 'b, 'h> {
-//             async fn call_me(&self, mut layer: impl SimpleMeshLayer) {
-//                 let mut handler = self.handler.write().await;
-//                 if let Err(e) = handler
-//                     .packet(self.packet, self.packet_status, self.bytes, &mut layer)
-//                     .await
-//                 {
-//                     log::error!("handler error: {e:?}");
-//                 }
-//             }
-//         }
-//     }
-//         //    struct PacketContext<'a, 'b, 'h> {
-//         //     packet: &'a Packet<'b>,
-//         //     packet_status: PacketStatus,
-//         //     bytes: &'b [u8],
-//         //     handler: &'h Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
-//         // }
-
-//         // impl<'a, 'b, 'h> WithLayer for PacketContext<'a, 'b, 'h> {
-//         //     async fn call_me(&self, mut layer: impl SimpleMeshLayer) {
-//         //         let mut handler = self.handler.write().await;
-//         //         if let Err(e) = handler
-//         //             .packet(self.packet, self.packet_status, self.bytes, &mut layer)
-//         //             .await
-//         //         {
-//         //             log::error!("handler error: {e:?}");
-//         //         }
-//         //     }
-//         // }
-
-//         // while let Some(rx_slot) = rx.recv_ref().await {
-//         //     let start = Instant::now();
-//         //     let Ok(packet) = meshcore::Packet::decode(&rx_slot.0) else {
-//         continue;
-//     };
-
-//     let ctx = PacketContext {
-//         packet: &packet,
-//         packet_status: rx_slot.1,
-//         bytes: &rx_slot.0[..],
-//         handler: &handler,
-//     };
-
-//     layer.with_layer(ctx).await;
-
-//     log::info!("packet took: {}", start.elapsed());
-// }
-// }

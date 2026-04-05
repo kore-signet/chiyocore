@@ -12,6 +12,7 @@ use litemap::store::{
     StoreIterable, StoreIterableMut, StoreMut, StoreSlice,
 };
 
+/// Wrapped Vec<T> that is specifically stored in PSRAM.
 pub struct PSRAMVec<T>(pub Vec<T, esp_alloc::ExternalMemory>);
 
 impl<T> Default for PSRAMVec<T> {

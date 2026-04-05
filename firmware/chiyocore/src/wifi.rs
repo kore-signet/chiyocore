@@ -1,3 +1,4 @@
+///! ESP32 wifi boilerplate
 use alloc::string::String;
 use embassy_executor::Spawner;
 use embassy_time::Duration;

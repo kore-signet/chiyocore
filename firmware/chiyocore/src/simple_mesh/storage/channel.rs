@@ -10,6 +10,7 @@ use crate::{
     storage::{ActiveFilesystem, FS_SIZE, SimpleFileDb},
 };
 
+/// A stored channel, with an assigned name and index/slot.
 #[derive(Serialize, Deserialize, Clone, Debug)]
 pub struct Channel {
     pub name: SmolStr,
@@ -36,6 +37,10 @@ impl Channel {
     }
 }
 
+/// Flash-backed storage for channels. Channels are stored by three keys:
+/// - hash -> first byte of the sha256 digest of the channel's secret key
+/// - name -> registered name for the channel
+/// - idx/slot -> index/slot the channel will be stored in, usually just increases monotonically
 pub struct ChannelStorage {
     by_hash: LiteMap<u8, u8>,
     by_name: LiteMap<SmolStr, u8>,

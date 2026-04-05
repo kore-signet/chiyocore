@@ -23,8 +23,10 @@ pub mod responses {
 
     use chiyocore::PacketStatus;
     pub use chiyocore::simple_mesh::MsgSent;
-    use chiyocore::simple_mesh::packet_log::{ChannelMsgRecv, ContactMsgRecv, SavedMessage};
     use chiyocore::simple_mesh::storage::contact::Contact;
+    use chiyocore::simple_mesh::storage::packet_log::{
+        ChannelMsgRecv, ContactMsgRecv, SavedMessage,
+    };
     use chiyocore::{CompanionError, FirmwareError, meshcore};
     use meshcore::Path;
     use meshcore::io::SliceWriter;

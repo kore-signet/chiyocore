@@ -4,11 +4,9 @@
 
 pub mod ntp;
 
-pub mod boards;
 pub mod builder;
 pub mod crypto;
 pub mod lora;
-pub mod message_log;
 pub mod partition_table;
 pub mod ping_bot;
 pub mod psram_vec;

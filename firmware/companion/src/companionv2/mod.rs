@@ -18,10 +18,10 @@ use crate::companion_protocol::protocol::{
 };
 use chiyocore::{
     CompanionResult, EspMutex,
-    message_log::MessageLog,
     simple_mesh::{
         SimpleMesh, SimpleMeshLayer,
-        packet_log::SavedMessage,
+        storage::message_log::MessageLog,
+        storage::packet_log::SavedMessage,
         storage::{MeshStorage, channel::Channel, contact::CachedContact},
     },
     storage::{ActiveFilesystem, FS_SIZE, PersistedObject, SimpleFileDb},

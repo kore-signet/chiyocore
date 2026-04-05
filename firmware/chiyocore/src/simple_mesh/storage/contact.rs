@@ -19,6 +19,7 @@ pub struct Contact {
     pub last_heard: u32,
 }
 
+/// Limited contact information for contacts, kept in a in-memory cache instead of on flash.
 #[derive(Clone)]
 pub struct CachedContact {
     pub key: [u8; 32],
@@ -47,6 +48,7 @@ fn contact_b64_key(key: &[u8; 32]) -> heapless::CString<{ CONTACT_KEY_SIZE + 1 }
     heapless::CString::from_bytes_with_nul(&s).unwrap()
 }
 
+/// Flash-backed storage for contacts. If you only need a contact's key and the path to reach them, prefer using the fast_get() method and hot_cache, since these do not involve costly flash reads.
 pub struct ContactStorage {
     pub hot_cache: Vec<CachedContact>,
     pub fs: SimpleFileDb<FS_SIZE>,

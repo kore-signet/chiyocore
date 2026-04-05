@@ -23,7 +23,7 @@
         use litemap::LiteMap;
         // use chiyocore::handler::{BasicHandlerManager, ContactManager, HandlerStorage};
         use chiyocore::storage::SimpleFileDb;
-        use chiyocore::{EspMutex, XIAO_S3};
+        use chiyocore::{EspMutex};
         use chiyocore::builder::{ChiyocoreNode, BuildChiyocoreLayer, BuildChiyocoreSet};
         use chiyocore::simple_mesh::MeshLayerGet;
         use meshcore::identity::LocalIdentity;

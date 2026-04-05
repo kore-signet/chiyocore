@@ -37,6 +37,7 @@ impl NtpTimestampGenerator for Timestamp<'_> {
     }
 }
 
+/// Regularly sync ESP32 RTC using NTP.
 #[embassy_executor::task]
 pub async fn ntp_task(stack: embassy_net::Stack<'static>, rtc: Arc<Rtc<'static>>) {
     const NTP_DELAY: embassy_time::Duration = embassy_time::Duration::from_secs(30);
@@ -55,6 +56,7 @@ pub async fn ntp_task(stack: embassy_net::Stack<'static>, rtc: Arc<Rtc<'static>>
     }
 }
 
+/// Do a single sync'ing of the ESP32 RTC using NTP.
 pub async fn ntp_once(stack: embassy_net::Stack<'static>, rtc: &Rtc<'_>) {
     loop {
         if stack.is_link_up() {

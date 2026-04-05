@@ -8,6 +8,7 @@ use sha2::digest::{FixedOutput, KeyInit, Update, generic_array::GenericArray};
 
 pub const CIPHER_BLOCK_SIZE: usize = 16;
 
+/// Hardware accelerated AES impl, using esp-hal.
 pub struct HardwareAES;
 
 impl AesImpl for HardwareAES {
@@ -63,6 +64,7 @@ impl AesImpl for HardwareAES {
 
 pub type HardwareSHA = esp_hal::sha::Sha256Context;
 
+/// Hardware accelerated HMAC impl, using esp-hal's SHA accelerator.
 pub struct HardwareHMAC;
 
 impl HmacImpl for HardwareHMAC {
@@ -75,21 +77,3 @@ impl HmacImpl for HardwareHMAC {
         out
     }
 }
-// }
-// pub struct HardwareSHA {
-//     ctx: esp_hal::sha::Sha256Context
-// }
-
-// impl Sha256Impl for HardwareSHA {
-//     fn make() -> Self {
-//         HardwareSHA { ctx: esp_hal::sha::Sha256Context::new() }
-//     }
-
-//     async fn update(&mut self, data: &[u8]) {
-//         self.ctx.update(data).wait().await;
-//     }
-
-//     async fn finish(mut self, out: &mut [u8; 32]) {
-//         self.ctx.finalize(out).wait().await;
-//     }
-// }

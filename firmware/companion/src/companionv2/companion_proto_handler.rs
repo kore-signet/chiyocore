@@ -24,7 +24,7 @@ use chiyocore::{
     lora::LORA_FREQUENCY_IN_HZ,
     meshcore,
     simple_mesh::{
-        packet_log::SavedMessage,
+        storage::packet_log::SavedMessage,
         storage::{channel::Channel, contact::Contact},
     },
 };

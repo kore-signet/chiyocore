@@ -73,7 +73,20 @@ with meshcore-cli:
 ## why chiyocore?
 [i think sakura chiyono o is neat](https://www.youtube.com/watch?v=e3YcYLE90po)
 
-## todos & random thoughts
+## development notes!
+
+### project architecture
+the main meshcore logic is written in [firmware/chiyocore](firmware/chiyocore/). the goals are that this should provide a framework that handles:
+- keeping track of contacts, channels and received packets
+- most packet sending logic
+- most packet decoding logic
+so that layers built on top of it can remain as high-level as possible.
+
+said layers are configured by the [builder](builder/) tool, which takes a board configuration plus a firmware setup config and generates a temporary binary crate linking all the configured handler layers together with the specified board pinout. it currently relies on statically knowing all possible layers and configurations (via the shared [chiyocore-config](chiyocore-config/) crate), though this should become more flexible in future.
+
+example implementations of handler layers are the [companion](firmware/companion/) implementation, as well as the example [TTC bus arrival time bot](firmware/chiyo-ttc/).
+
+### todos & random thoughts
 - more radio support!!
 - partition tables need to be configurable
 - is packet delaying logic correct?

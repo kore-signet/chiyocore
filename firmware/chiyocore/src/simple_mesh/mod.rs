@@ -1,6 +1,9 @@
 use core::{ops::DerefMut, time::Duration};
 
-use crate::PacketStatus;
+use crate::{
+    PacketStatus,
+    simple_mesh::storage::packet_log::{HashLog, SavedMessage},
+};
 use alloc::{borrow::Cow, string::String, sync::Arc, vec::Vec};
 use arrayref::array_ref;
 use embassy_executor::SendSpawner;
@@ -23,19 +26,17 @@ use crate::{
     BumpaloVec, CompanionError, CompanionResult, EspMutex, MeshcoreHandler,
     crypto::{HardwareAES, HardwareHMAC, HardwareSHA},
     lora::LoraTaskChannel,
-    simple_mesh::{
-        packet_log::{HashLog, SavedMessage},
-        storage::{
-            MeshStorage,
-            channel::Channel,
-            contact::{CachedContact, Contact},
-            shared_key_cache::SharedKeyCache,
-        },
+    simple_mesh::storage::{
+        MeshStorage,
+        channel::Channel,
+        contact::{CachedContact, Contact},
+        shared_key_cache::SharedKeyCache,
     },
 };
 
-pub mod packet_log;
+mod layer;
 pub mod storage;
+pub use layer::*;
 
 pub struct MsgSent {
     pub is_flood: bool,
@@ -43,12 +44,8 @@ pub struct MsgSent {
     pub suggested_timeout: u32,
 }
 
-#[derive(Clone, Copy)]
-pub struct AckState {
-    pub failed: bool,
-    pub attempt: u8,
-}
-
+/// A SimpleMesh instance is a full meshcore node (i.e, a set of ed25519 keys) which runs a set of layers on top of it.
+/// To avoid making everything into a mess of generics, these layers are stored separately, and run on top of the mesh node via some scaffolding in the [MeshcoreHandler] implementation.
 pub struct SimpleMesh {
     pub identity: LocalIdentity,
     pub packet_log: HashLog<32>,
@@ -84,73 +81,9 @@ impl SimpleMesh {
     }
 }
 
-#[embassy_executor::task(pool_size = 16)]
-async fn send_with_retry(
-    wait_map: Arc<WaitMap<[u8; 4], bool>>,
-    mut message: TextMessageData<'static>,
-    contact: ForeignIdentity,
-    mesh: Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
-    mut path: Option<meshcore::Path<'static>>,
-    waker: Arc<WaitCell>,
-) {
-    let self_identity = mesh.read().await.identity.clone();
-    let mut attempt = 0u8;
-    let mut has_flooded = false;
-    // let mut has_flooded = path.is_none();
-    while attempt <= 3 {
-        log::info!("retrying msg, attempt {attempt}");
-        message.header = message.header.with_attempt(attempt);
-
-        let expected_ack =
-            Ack::calculate::<HardwareSHA>(&message, &self_identity.as_foreign()).await;
-
-        let delay = mesh
-            .read()
-            .await
-            .send_to_contact::<TextMessageData<'_>>(&contact, path.clone(), &message, None)
-            .await
-            .unwrap();
-
-        let delay = delay.max(Duration::from_secs(1));
-
-        match embassy_futures::select::select(
-            wait_map.wait(expected_ack.crc),
-            embassy_time::Timer::after(embassy_time::Duration::from_millis(
-                delay.as_millis() as u64
-            )),
-        )
-        .await
-        {
-            embassy_futures::select::Either::First(_) => {
-                waker.wake();
-                break;
-            }
-            embassy_futures::select::Either::Second(_) => {
-                attempt += 1;
-                if attempt >= 3 && !has_flooded {
-                    attempt = 0;
-                    let mesh = mesh.read().await;
-                    let mut contacts = mesh.storage.contacts.write().await;
-                    let mut contact = contacts
-                        .full_get(*contact.verify_key)
-                        .await
-                        .unwrap()
-                        .unwrap();
-                    contact.path_to = None;
-                    contacts.insert(contact).await.unwrap();
-
-                    path = None;
-                    has_flooded = true;
-                }
-            }
-        }
-    }
-
-    waker.wake();
-}
-
 /* tx methods */
 impl SimpleMesh {
+    /// Sends an encrypted direct message to a contact, retrying if it isn't acknowledged.
     pub async fn send_to_contact_with_retry<P: SerDeser + Encryptable + PacketPayload>(
         mesh: &Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
         contact: &ForeignIdentity,
@@ -183,7 +116,8 @@ impl SimpleMesh {
         Ok(wait_cell)
     }
 
-    /// returns est. timeout
+    /// Sends an encrypted message to a contact.
+    /// Returns recommended timeout for the message.
     pub async fn send_to_contact<P: SerDeser + Encryptable + PacketPayload>(
         &self,
         contact: &ForeignIdentity,
@@ -230,6 +164,8 @@ impl SimpleMesh {
         Ok(timeout)
     }
 
+    /// Sends an anonymous request to the specified contact.
+    /// Returns recommended timeout for the message.
     pub async fn send_anon_req<P: SerDeser + Encryptable>(
         &self,
         contact: &ForeignIdentity,
@@ -264,6 +200,8 @@ impl SimpleMesh {
         Ok(timeout)
     }
 
+    /// Sends a text message directly to a contact.
+    /// Returns suggested timeout for the message, alongside the expected ACK code for it.
     pub async fn send_direct_message(
         &self,
         contact: &ForeignIdentity,
@@ -284,6 +222,8 @@ impl SimpleMesh {
         })
     }
 
+    /// Sends a message to a group/channel.
+    /// Returns recommended timeout for the message.
     pub async fn send_channel_message(
         &self,
         channel: &ChannelKeys,
@@ -302,6 +242,8 @@ impl SimpleMesh {
         Ok(timeout)
     }
 
+    /// Sends a packet using flood routing
+    /// Returns recommended timeout for the message.
     pub async fn send_flood_packet<P: PacketPayload>(
         &self,
         payload: &P::Representation<'_>,
@@ -322,6 +264,8 @@ impl SimpleMesh {
         self.send_packet(&packet, true, delay).await
     }
 
+    /// Sends a packet directly (i.e, without flooding)
+    /// Returns recommended timeout for the message.
     pub async fn send_direct_packet<P: PacketPayload>(
         &self,
         payload: &P::Representation<'_>,
@@ -347,6 +291,8 @@ impl SimpleMesh {
         Ok(timeout)
     }
 
+    /// Sends a packet, possibly with some delay.
+    /// Returns recommended timeout for the message.
     pub async fn send_packet(
         &self,
         packet: &Packet<'_>,
@@ -364,6 +310,7 @@ impl SimpleMesh {
         })
     }
 
+    /// Send an ack to the specified direct message packet (sends a returnedpath message if packet was flooded.)
     async fn send_ack(
         &self,
         packet: &Packet<'_>,
@@ -415,101 +362,70 @@ impl SimpleMesh {
     }
 }
 
-pub trait SimpleMeshLayer {
-    fn packet<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_bytes: &'f [u8],
-        packet_status: PacketStatus,
-    ) -> impl Future<Output = CompanionResult<()>>;
+/// Task to send a text message to a contact, retrying it if it does not get acknowledged by the peer (and eventually switching to flood routing and resetting the peer's path.).
+#[embassy_executor::task(pool_size = 16)]
+async fn send_with_retry(
+    wait_map: Arc<WaitMap<[u8; 4], bool>>,
+    mut message: TextMessageData<'static>,
+    contact: ForeignIdentity,
+    mesh: Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
+    mut path: Option<meshcore::Path<'static>>,
+    waker: Arc<WaitCell>,
+) {
+    let self_identity = mesh.read().await.identity.clone();
+    let mut attempt = 0u8;
+    let mut has_flooded = false;
+    // let mut has_flooded = path.is_none();
+    while attempt <= 3 {
+        log::info!("retrying msg, attempt {attempt}");
+        message.header = message.header.with_attempt(attempt);
 
-    fn text_message<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        contact: &'f CachedContact,
-        message: &'f TextMessageData<'_>,
-    ) -> impl Future<Output = CompanionResult<()>>;
+        let expected_ack =
+            Ack::calculate::<HardwareSHA>(&message, &self_identity.as_foreign()).await;
 
-    fn group_text<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        channel: &'f Channel,
-        message: &'f TextMessageData<'_>,
-    ) -> impl Future<Output = CompanionResult<()>>;
+        let delay = mesh
+            .read()
+            .await
+            .send_to_contact::<TextMessageData<'_>>(&contact, path.clone(), &message, None)
+            .await
+            .unwrap();
 
-    fn ack<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        ack: &'f Ack,
-    ) -> impl Future<Output = CompanionResult<()>>;
+        let delay = delay.max(Duration::from_millis(2500));
 
-    fn advert<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        advert: &'f Advert<'_>,
-    ) -> impl Future<Output = CompanionResult<()>>;
+        match embassy_futures::select::select(
+            wait_map.wait(expected_ack.crc),
+            embassy_time::Timer::after(embassy_time::Duration::from_millis(
+                delay.as_millis() as u64
+            )),
+        )
+        .await
+        {
+            embassy_futures::select::Either::First(_) => {
+                waker.wake();
+                break;
+            }
+            embassy_futures::select::Either::Second(_) => {
+                attempt += 1;
+                if attempt >= 3 && !has_flooded {
+                    attempt = 0;
+                    let mesh = mesh.read().await;
+                    let mut contacts = mesh.storage.contacts.write().await;
+                    let mut contact = contacts
+                        .full_get(*contact.verify_key)
+                        .await
+                        .unwrap()
+                        .unwrap();
+                    contact.path_to = None;
+                    contacts.insert(contact).await.unwrap();
 
-    fn returned_path<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        contact: &'f CachedContact,
-        path: &'f ReturnedPath<'_>,
-    ) -> impl Future<Output = CompanionResult<()>>;
+                    path = None;
+                    has_flooded = true;
+                }
+            }
+        }
+    }
 
-    fn response<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        contact: &'f CachedContact,
-        response: &'f [u8],
-    ) -> impl Future<Output = CompanionResult<()>>;
-
-    fn request<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        contact: &'f CachedContact,
-        request: &'f RequestPayload<'_>,
-    ) -> impl Future<Output = CompanionResult<()>>;
-
-    fn anonymous_request<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        contact: &'f ForeignIdentity,
-        data: &'f [u8],
-    ) -> impl Future<Output = CompanionResult<()>>;
-
-    fn trace_packet<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        snrs: &'f [i8],
-        trace: &'f TracePacket<'_>,
-    ) -> impl Future<Output = CompanionResult<()>>;
-
-    fn control_packet<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        payload: &'f ControlPayload,
-    ) -> impl Future<Output = CompanionResult<()>>;
+    waker.wake();
 }
 
 impl SimpleMesh {
@@ -909,10 +825,8 @@ impl MeshcoreHandler for SimpleMesh {
             return Ok(());
         }
 
-        // for layer in &mut extra[..] {
         extra.packet(self, packet, bytes, packet_status).await?;
-        // }
-        //
+
         match packet.header.payload_type() {
             PayloadType::Request => {
                 self.request(
@@ -1023,471 +937,3 @@ impl MeshcoreHandler for SimpleMesh {
         Ok(())
     }
 }
-
-//     pub struct SimpleCompanion<B: CompanionLayer + Send> {
-//     pub identity: StoredIdentity,
-//     pub config: CompanionConfig,
-//     pub lora_tx: LoraTaskChannel,
-//     pub companion_tx: RefCell<TcpCompanionSink>,
-//     pub rtc: Rtc<'static>,
-//     pub scratch: bumpalo::Bump,
-//     pub(crate) signature_in_progress: Option<SigningState>,
-//     pub bot: RefCell<B>,
-//     pub storage: SimpleCompanionStorage,
-//     pub stats: SimpleCompanionStats,
-// }
-
-// }
-
-/* da tuple zone */
-
-impl<A> SimpleMeshLayer for &mut A
-where
-    A: SimpleMeshLayer,
-{
-    fn packet<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_bytes: &'f [u8],
-        packet_status: PacketStatus,
-    ) -> impl Future<Output = CompanionResult<()>> {
-        A::packet(self, mesh, packet, packet_bytes, packet_status)
-    }
-
-    fn text_message<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        contact: &'f CachedContact,
-        message: &'f TextMessageData<'_>,
-    ) -> impl Future<Output = CompanionResult<()>> {
-        A::text_message(self, mesh, packet, packet_status, contact, message)
-    }
-
-    fn group_text<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        channel: &'f Channel,
-        message: &'f TextMessageData<'_>,
-    ) -> impl Future<Output = CompanionResult<()>> {
-        A::group_text(self, mesh, packet, packet_status, channel, message)
-    }
-
-    fn ack<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        ack: &'f Ack,
-    ) -> impl Future<Output = CompanionResult<()>> {
-        A::ack(self, mesh, packet, packet_status, ack)
-    }
-
-    fn advert<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        advert: &'f Advert<'_>,
-    ) -> impl Future<Output = CompanionResult<()>> {
-        A::advert(self, mesh, packet, packet_status, advert)
-    }
-
-    fn returned_path<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        contact: &'f CachedContact,
-        path: &'f ReturnedPath<'_>,
-    ) -> impl Future<Output = CompanionResult<()>> {
-        A::returned_path(self, mesh, packet, packet_status, contact, path)
-    }
-
-    fn response<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        contact: &'f CachedContact,
-        response: &'f [u8],
-    ) -> impl Future<Output = CompanionResult<()>> {
-        A::response(self, mesh, packet, packet_status, contact, response)
-    }
-
-    fn request<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        contact: &'f CachedContact,
-        request: &'f RequestPayload<'_>,
-    ) -> impl Future<Output = CompanionResult<()>> {
-        A::request(self, mesh, packet, packet_status, contact, request)
-    }
-
-    fn anonymous_request<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        contact: &'f ForeignIdentity,
-        data: &'f [u8],
-    ) -> impl Future<Output = CompanionResult<()>> {
-        A::anonymous_request(self, mesh, packet, packet_status, contact, data)
-    }
-
-    fn trace_packet<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        snrs: &'f [i8],
-        trace: &'f TracePacket<'_>,
-    ) -> impl Future<Output = CompanionResult<()>> {
-        A::trace_packet(self, mesh, packet, packet_status, snrs, trace)
-    }
-
-    fn control_packet<'f>(
-        &'f mut self,
-        mesh: &'f SimpleMesh,
-        packet: &'f Packet<'_>,
-        packet_status: PacketStatus,
-        payload: &'f ControlPayload,
-    ) -> impl Future<Output = CompanionResult<()>> {
-        A::control_packet(self, mesh, packet, packet_status, payload)
-    }
-}
-
-pub trait WithLayer {
-    fn call_me(&self, layer: impl SimpleMeshLayer) -> impl Future<Output = ()>;
-}
-
-pub trait MeshLayerGet: Send {
-    type Layer<'a>: SimpleMeshLayer + Send;
-
-    fn with_layer(&self, f: impl WithLayer) -> impl Future<Output = ()>;
-}
-
-impl<L: SimpleMeshLayer + Send + 'static> MeshLayerGet for Arc<RwLock<esp_sync::RawMutex, L>> {
-    type Layer<'a> = &'a mut L;
-
-    fn with_layer(&self, f: impl WithLayer) -> impl Future<Output = ()> {
-        self.write()
-            .then(|mut v| async move { f.call_me(&mut *v).await })
-    }
-}
-
-impl<L: SimpleMeshLayer + Send + 'static> MeshLayerGet for Arc<EspMutex<L>> {
-    type Layer<'a> = &'a mut L;
-
-    fn with_layer(&self, f: impl WithLayer) -> impl Future<Output = ()> {
-        self.lock()
-            .then(|mut v| async move { f.call_me(&mut *v).await })
-    }
-}
-
-macro_rules! impl_mesh_layer_tuple {
-    ($join:path; $($var:ident),*) => {
-        #[allow(non_snake_case)]
-        impl <$($var),*> MeshLayerGet for ($(Arc<RwLock<esp_sync::RawMutex, $var>>),*) where $($var: SimpleMeshLayer + Send + 'static),* {
-            type Layer<'a> = ($(&'a mut $var),*);
-
-                async fn with_layer(&self, f: impl WithLayer) {
-                    let ($($var),*) = self;
-                    let ($(mut $var),*) = $join(
-                        $(
-                           $var.write()
-                        ),*
-                    ).await;
-
-                    f.call_me(($($var.deref_mut()),*)).await;
-                }
-        }
-
-        #[allow(non_snake_case)]
-        impl <$($var),*> MeshLayerGet for ($(Arc<EspMutex<$var>>),*) where $($var: SimpleMeshLayer + Send + 'static),* {
-            type Layer<'a> = ($(&'a mut $var),*);
-
-                async fn with_layer(&self, f: impl WithLayer) {
-                    let ($($var),*) = self;
-                    let ($(mut $var),*) = $join(
-                        $(
-                           $var.lock()
-                        ),*
-                    ).await;
-
-                    f.call_me(($($var.deref_mut()),*)).await;
-                }
-        }
-
-        #[allow(non_snake_case)]
-        impl <$($var),*> SimpleMeshLayer for ($(&mut $var),*) where $($var: SimpleMeshLayer),* {
-                async fn packet<'f>(
-                    &'f mut self,
-                    mesh: &'f SimpleMesh,
-                    packet: &'f Packet<'_>,
-                    packet_bytes: &'f [u8],
-                    packet_status: PacketStatus,
-                ) -> CompanionResult<()> {
-                    let ($($var),*) = self;
-                    let ($($var),*) = $join(
-                        $(
-                           $var.packet(mesh, packet, packet_bytes, packet_status)
-                        ),*
-                    ).await;
-                    $(
-                        $var?;
-                    )*
-                    Ok(())
-                }
-
-                async fn text_message<'f>(
-                    &'f mut self,
-                    mesh: &'f SimpleMesh,
-                    packet: &'f Packet<'_>,
-                    packet_status: PacketStatus,
-                    contact: &'f CachedContact,
-                    message: &'f TextMessageData<'_>,
-                ) -> CompanionResult<()> {
-                    let ($($var),*) = self;
-                    let ($($var),*) = $join(
-                        $(
-                           $var.text_message(mesh, packet, packet_status, contact, message)
-                        ),*
-                    ).await;
-                    $(
-                        $var?;
-                    )*
-                    Ok(())
-                }
-
-                async fn group_text<'f>(
-                    &'f mut self,
-                    mesh: &'f SimpleMesh,
-                    packet: &'f Packet<'_>,
-                    packet_status: PacketStatus,
-                    channel: &'f Channel,
-                    message: &'f TextMessageData<'_>,
-                ) -> CompanionResult<()> {
-                    let ($($var),*) = self;
-                    let ($($var),*) = $join(
-                        $(
-                           $var.group_text(mesh, packet, packet_status, channel, message)
-                        ),*
-                    ).await;
-                    $(
-                        $var?;
-                    )*
-                    Ok(())
-                }
-
-                async fn ack<'f>(
-                    &'f mut self,
-                    mesh: &'f SimpleMesh,
-                    packet: &'f Packet<'_>,
-                    packet_status: PacketStatus,
-                    ack: &'f Ack,
-                ) -> CompanionResult<()> {
-                    let ($($var),*) = self;
-                    let ($($var),*) = $join(
-                        $(
-                           $var.ack(mesh, packet, packet_status, ack)
-                        ),*
-                    ).await;
-                    $(
-                        $var?;
-                    )*
-                    Ok(())
-                }
-
-                async fn advert<'f>(
-                    &'f mut self,
-                    mesh: &'f SimpleMesh,
-                    packet: &'f Packet<'_>,
-                    packet_status: PacketStatus,
-                    advert: &'f Advert<'_>,
-                ) -> CompanionResult<()> {
-                    let ($($var),*) = self;
-                    let ($($var),*) = $join(
-                        $(
-                           $var.advert(mesh, packet, packet_status, advert)
-                        ),*
-                    ).await;
-                    $(
-                        $var?;
-                    )*
-                    Ok(())
-                }
-
-                async fn returned_path<'f>(
-                    &'f mut self,
-                    mesh: &'f SimpleMesh,
-                    packet: &'f Packet<'_>,
-                    packet_status: PacketStatus,
-                    contact: &'f CachedContact,
-                    path: &'f ReturnedPath<'_>,
-                ) -> CompanionResult<()> {
-                    let ($($var),*) = self;
-                    let ($($var),*) = $join(
-                        $(
-                           $var.returned_path(mesh, packet, packet_status, contact, path)
-                        ),*
-                    ).await;
-                    $(
-                        $var?;
-                    )*
-                    Ok(())
-                }
-
-                async fn response<'f>(
-                    &'f mut self,
-                    mesh: &'f SimpleMesh,
-                    packet: &'f Packet<'_>,
-                    packet_status: PacketStatus,
-                    contact: &'f CachedContact,
-                    response_bytes: &'f [u8]
-                ) -> CompanionResult<()> {
-                    let ($($var),*) = self;
-                    let ($($var),*) = $join(
-                        $(
-                           $var.response(mesh, packet, packet_status, contact, response_bytes)
-                        ),*
-                    ).await;
-                    $(
-                        $var?;
-                    )*
-                    Ok(())
-                }
-
-                async fn request<'f>(
-                    &'f mut self,
-                    mesh: &'f SimpleMesh,
-                    packet: &'f Packet<'_>,
-                    packet_status: PacketStatus,
-                    contact: &'f CachedContact,
-                    request: &'f RequestPayload<'_>
-                ) -> CompanionResult<()> {
-                    let ($($var),*) = self;
-                    let ($($var),*) = $join(
-                        $(
-                           $var.request(mesh, packet, packet_status, contact, request)
-                        ),*
-                    ).await;
-                    $(
-                        $var?;
-                    )*
-                    Ok(())
-                }
-
-                async fn anonymous_request<'f>(
-                    &'f mut self,
-                    mesh: &'f SimpleMesh,
-                    packet: &'f Packet<'_>,
-                    packet_status: PacketStatus,
-                    contact: &'f ForeignIdentity,
-                    request: &'f [u8]
-                ) -> CompanionResult<()> {
-                    let ($($var),*) = self;
-                    let ($($var),*) = $join(
-                        $(
-                           $var.anonymous_request(mesh, packet, packet_status, contact, request)
-                        ),*
-                    ).await;
-                    $(
-                        $var?;
-                    )*
-                    Ok(())
-                }
-
-
-                async fn trace_packet<'f>(
-                    &'f mut self,
-                    mesh: &'f SimpleMesh,
-                    packet: &'f Packet<'_>,
-                    packet_status: PacketStatus,
-                    snrs: &'f [i8],
-                    trace: &'f TracePacket<'_>
-                ) -> CompanionResult<()> {
-                    let ($($var),*) = self;
-                    let ($($var),*) = $join(
-                        $(
-                           $var.trace_packet(mesh, packet, packet_status, snrs, trace)
-                        ),*
-                    ).await;
-                    $(
-                        $var?;
-                    )*
-                    Ok(())
-                }
-
-                async fn control_packet<'f>(
-                    &'f mut self,
-                    mesh: &'f SimpleMesh,
-                    packet: &'f Packet<'_>,
-                    packet_status: PacketStatus,
-                    payload: &'f ControlPayload
-                ) -> CompanionResult<()> {
-                    let ($($var),*) = self;
-                    let ($($var),*) = $join(
-                        $(
-                           $var.control_packet(mesh, packet, packet_status, payload)
-                        ),*
-                    ).await;
-                    $(
-                        $var?;
-                    )*
-                    Ok(())
-                }
-        }
-    };
-}
-
-impl_mesh_layer_tuple!(
-    embassy_futures::join::join;
-    A,B
-);
-impl_mesh_layer_tuple!(
-    embassy_futures::join::join3;
-    A,B,C
-);
-impl_mesh_layer_tuple!(
-    embassy_futures::join::join4;
-    A,B,C,D
-);
-impl_mesh_layer_tuple!(
-    embassy_futures::join::join5;
-    A,B,C,D,F
-);
-
-// async fn test_layer<A: SimpleMeshLayer, B: SimpleMeshLayer>(
-//     (A, B): &(Arc<RwLock<esp_sync::RawMutex, A>>, Arc<RwLock<esp_sync::RawMutex, B>>),
-//     with_fn: impl AsyncFnOnce((&mut A, &mut B))
-// ) {
-//     let (mut A, mut B) = embassy_futures::join::join(A.write(), B.write()).await;
-//     with_fn((A.deref_mut(), B.deref_mut())).await;
-
-//     todo!()
-// }
-
-// #[allow(non_snake_case)]
-// impl<A, B> MeshLayerGet
-//     for (
-//         Arc<RwLock<esp_sync::RawMutex, A>>,
-//         Arc<RwLock<esp_sync::RawMutex, B>>,
-//     )
-// where
-//     A: SimpleMeshLayer + Send + 'static,
-//     B: SimpleMeshLayer + Send + 'static,
-// {
-//     type Layer<'a> = (&'a mut A, &'a mut B);
-//     async fn with_layer(&self, f: impl AsyncFnOnce(Self::Layer<'_>)) {
-//         let (A, B) = self;
-//         let (mut A, mut B) = embassy_futures::join::join(A.write(), B.write()).await;
-//         f((A.deref_mut(), B.deref_mut())).await;
-//     }
-// }

@@ -5,7 +5,9 @@ use sequential_storage::{
     queue::{QueueConfig, QueueStorage},
 };
 
-use crate::{partition_table, simple_mesh::packet_log::SavedMessage, storage::FsPartition};
+use crate::{
+    partition_table, simple_mesh::storage::packet_log::SavedMessage, storage::FsPartition,
+};
 
 pub const MESSAGE_LOG_SIZE: usize = partition_table::LOGS.size as usize;
 

@@ -1,3 +1,9 @@
+//! The Chiyocore building system :tm: is a little weird. here's how it works:
+//!
+//! * **a node** -> is a standalone meshcore entity, with its own identity and independent set of handler layers
+//! * **BuildChiyocoreLayer** -> takes some configuration input and builds a layer that is supposed to be attached to a certain node. returns a locked/arc'd version of said layer
+//! * **BuildChiyocoreSet** -> builds a full node, complete with a set of handler layers.
+
 use core::marker::PhantomData;
 
 use alloc::sync::Arc;
@@ -20,9 +26,11 @@ use thingbuf::mpsc::StaticReceiver;
 use crate::{
     DataWithSnr, EspMutex,
     lora::{LoraPins, LoraTaskChannel, TaskChannelHandler},
-    message_log::MessageLog,
     partition_table,
-    simple_mesh::{MeshLayerGet, SimpleMesh, storage::MeshStorage},
+    simple_mesh::{
+        MeshLayerGet, SimpleMesh,
+        storage::{MeshStorage, message_log::MessageLog},
+    },
     storage::{ActiveFilesystem, FsPartition, SimpleFileDb},
 };
 
@@ -79,10 +87,13 @@ impl<L: BuildChiyocoreLayer> BuildChiyocoreSet for ChiyocoreNode<L> {
     }
 }
 
+/// Setup data that will be discarded before the run() function
+/// (useful for non-send items, such as embassy_net::Stack)
 pub struct ChiyocoreSetupData {
     pub net_stack: Option<embassy_net::Stack<'static>>,
 }
 
+/// A constructed instance of a Chiyocore firmware.
 pub struct Chiyocore<L: 'static, D> {
     pub base_peripherals: ChiyocorePeripheralSet,
     pub fs: ChiyocoreFs,
@@ -114,6 +125,7 @@ impl<T: 'static> Chiyocore<T, ChiyocoreSetupData> {
         }
     }
 
+    /// Starts wifi in client mode and constructs an embassy network stack.
     pub async fn add_network(
         &mut self,
         spawner: &embassy_executor::Spawner,
@@ -157,6 +169,7 @@ impl<T: 'static> Chiyocore<T, ChiyocoreSetupData> {
         &self.fs.log_fs
     }
 
+    /// Adds a set of nodes to this Chiyocore instance.
     pub async fn add_node<B: BuildChiyocoreSet>(
         self,
         spawner: &Spawner,
@@ -184,6 +197,7 @@ impl<T: 'static> Chiyocore<T, ChiyocoreSetupData> {
         }
     }
 
+    /// Ejects setup data and makes this instance ready to be run.
     pub fn build(self) -> Chiyocore<T, ()> {
         let Chiyocore {
             base_peripherals,
@@ -213,6 +227,7 @@ impl<L: TaskChannelHandler + 'static> Chiyocore<L, ()> {
     }
 }
 
+/// Required filesystems, constructed and usable for handler layers.
 pub struct ChiyocoreFs {
     pub main_fs: Arc<EspMutex<ActiveFilesystem<{ partition_table::MESHCORE_DATA.size as usize }>>>,
     pub log_fs: Arc<EspMutex<MessageLog>>,
@@ -244,6 +259,7 @@ impl ChiyocoreFs {
     }
 }
 
+/// Constructed set of Chiyocore peripherals as running drivers.
 pub struct ChiyocorePeripheralSet {
     pub rtc: Arc<Rtc<'static>>,
     pub sha: ShaDriver<'static>,
@@ -291,6 +307,7 @@ impl ChiyocorePeripheralSet {
     }
 }
 
+/// Bundle of peripherals required to run Chiyocore.
 pub struct ChiyocorePeripherals {
     pub lpwr: LPWR<'static>,
     pub sha: SHA<'static>,
