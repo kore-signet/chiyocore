@@ -1,4 +1,5 @@
 use alloc::sync::Arc;
+use chiyo_hal::{EspMutex, embassy_sync, esp_sync};
 use embassy_sync::rwlock::RwLock;
 
 pub mod channel;
@@ -8,7 +9,6 @@ pub mod packet_log;
 pub mod shared_key_cache;
 
 use crate::{
-    EspMutex,
     simple_mesh::storage::{channel::ChannelStorage, contact::ContactStorage},
     storage::{ActiveFilesystem, FS_SIZE},
 };

@@ -10,44 +10,22 @@ path = "./src/main.rs"
 
 [dependencies]
 chiyocore = { path = "../chiyocore" }
-chiyocore-ttc = { path = "../chiyo-ttc" }
+# chiyocore-ttc = { path = "../chiyo-ttc" }
 chiyocore-config = { path = "../../chiyocore-config", default-features = false }
 chiyocore-companion = { path = "../companion" }
 ed25519-compact = { version = "2.2.0", default-features = false }
-embassy-executor = { version = "0.9.1", features = ["log"] }
-embassy-net = { version = "0.8.0", features = [
-  "dhcpv4",
-  "udp",
-  "medium-ethernet",
-  "dns",
-  "tcp",
-] }
-embassy-sync = "0.7.2"
-embassy-time = { version = "0.5.0", features = ["log"] }
-esp-alloc = { git = "https://github.com/esp-rs/esp-hal.git", rev = "ab7a8e746c292c9c7c5a39a7fc9e4d8c01e70cbf", features = ["esp32s3", "nightly"] }
-esp-backtrace = { git = "https://github.com/esp-rs/esp-hal.git", rev = "ab7a8e746c292c9c7c5a39a7fc9e4d8c01e70cbf",  features = [
-  "esp32s3",
-  "panic-handler",
-  "println",
-] }
-esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal.git", rev = "ab7a8e746c292c9c7c5a39a7fc9e4d8c01e70cbf",  features = ["esp32s3", "log-04"] }
-esp-hal = { git = "https://github.com/esp-rs/esp-hal.git", rev = "ab7a8e746c292c9c7c5a39a7fc9e4d8c01e70cbf", features = ["esp32s3", "log-04", "psram", "unstable"] }
-esp-println = { git = "https://github.com/esp-rs/esp-hal.git", rev = "ab7a8e746c292c9c7c5a39a7fc9e4d8c01e70cbf",  features = ["esp32s3", "log-04"] }
-esp-radio = { git = "https://github.com/esp-rs/esp-hal.git", rev = "ab7a8e746c292c9c7c5a39a7fc9e4d8c01e70cbf",  features = ["esp32s3", "wifi", "esp-alloc", "unstable"] }
-esp-rtos = { git = "https://github.com/esp-rs/esp-hal.git", rev = "ab7a8e746c292c9c7c5a39a7fc9e4d8c01e70cbf", features = ["embassy", "esp-alloc", "esp-radio", "esp32s3", "log-04"] }
-esp-storage = { git = "https://github.com/esp-rs/esp-hal.git", rev = "ab7a8e746c292c9c7c5a39a7fc9e4d8c01e70cbf",  features = [
-  "bytewise-read",
-  "esp-hal",
-  "esp-sync",
-  "esp32s3",
-] }
-esp-sync = { git = "https://github.com/esp-rs/esp-hal.git", rev = "ab7a8e746c292c9c7c5a39a7fc9e4d8c01e70cbf",  features = ["esp32s3"] }
+embassy-executor = { version = "0.10", features = ["defmt"] }
+chiyo-hal = { path = "../chiyo-hal" }
+esp-bootloader-esp-idf = { git = "https://github.com/esp-rs/esp-hal.git", rev = "91c776f5c95ac7c3027d12569e2cfdebacfefc73",  features = ["esp32s3"] }
 heapless = { version = "0.9.2", features = ["alloc", "serde"] }
 litemap = "0.8.1"
-littlefs2 = { git = "https://github.com/kore-signet/littlefs2.git", features = ["alloc", "c-stubs", "log-all", "log-error", "log-info", "log-trace", "log-debug", "log-warn", "ll-trace"] }
-log = "0.4.27"
+littlefs2 = { git = "https://github.com/kore-signet/littlefs2.git", features = ["alloc", "c-stubs"] }
 rand = { version = "0.9", default-features = false }
 smol_str = { version = "0.3.6", default-features = false, features = ["serde"] }
+defmt = { version = "1.0.1", features = ["alloc"] }
+esp-rtos = { git = "https://github.com/esp-rs/esp-hal.git", rev = "91c776f5c95ac7c3027d12569e2cfdebacfefc73",  features = ["esp32s3", "esp-alloc", "esp-radio", "defmt", "alloc"] }
+esp-alloc = { git = "https://github.com/esp-rs/esp-hal.git", rev = "91c776f5c95ac7c3027d12569e2cfdebacfefc73", features = ["esp32s3", "nightly"] }
+esp-hal = { git = "https://github.com/esp-rs/esp-hal.git", rev = "91c776f5c95ac7c3027d12569e2cfdebacfefc73", features = ["esp32s3", "defmt", "psram", "unstable"] }
 
 
 [lints]

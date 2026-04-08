@@ -1,10 +1,11 @@
 use alloc::{string::String, sync::Arc, vec::Vec};
 use base64::{Engine, prelude::BASE64_URL_SAFE};
+use chiyo_hal::EspMutex;
 use meshcore::{Path, identity::ForeignIdentity};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    EspMutex, FirmwareResult,
+    FirmwareResult,
     storage::{ActiveFilesystem, FS_SIZE, SimpleFileDb},
 };
 

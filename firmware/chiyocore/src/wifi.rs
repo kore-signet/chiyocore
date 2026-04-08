@@ -1,12 +1,13 @@
 ///! ESP32 wifi boilerplate
 use alloc::string::String;
+use chiyo_hal::{embassy_net, embassy_time, esp_hal, esp_radio};
 use embassy_executor::Spawner;
 use embassy_time::Duration;
 
+use chiyo_hal::esp_println::println;
 use embassy_net::Runner;
 use embassy_time::Timer;
 use esp_hal::peripherals::WIFI;
-use esp_println::println;
 use esp_radio::wifi::{ControllerConfig, Interface, WifiController, sta::StationConfig};
 
 use crate::mk_static;
@@ -78,8 +79,8 @@ pub async fn wifi_init(
         seed,
     );
 
-    spawner.spawn(connection(controller)).ok();
-    spawner.spawn(net_task(runner)).ok();
+    spawner.spawn(connection(controller).unwrap());
+    spawner.spawn(net_task(runner).unwrap());
 
     stack.wait_config_up().await;
 

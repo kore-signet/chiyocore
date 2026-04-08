@@ -1,6 +1,7 @@
 use alloc::{ffi::CString, sync::Arc};
+use chiyo_hal::{EspMutex, EspRwLock, esp_hal};
 use chiyocore::{PacketStatus, meshcore};
-use embassy_sync::rwlock::RwLock;
+use defmt::{Debug2Format, error, info};
 use esp_hal::rtc_cntl::Rtc;
 use litemap::LiteMap;
 use meshcore::{
@@ -17,7 +18,7 @@ use crate::companion_protocol::protocol::{
     responses::{self},
 };
 use chiyocore::{
-    CompanionResult, EspMutex,
+    CompanionResult,
     simple_mesh::{
         SimpleMesh, SimpleMeshLayer,
         storage::message_log::MessageLog,
@@ -40,7 +41,7 @@ pub struct Companion {
     global_config: PersistedObject<LiteMap<SmolStr, SmolStr>, FS_SIZE>,
     identity: LocalIdentity,
     storage: MeshStorage,
-    mesh: Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
+    mesh: Arc<EspRwLock<SimpleMesh>>,
     companion_sink: ChannelCompanionSink,
     rtc: Arc<Rtc<'static>>,
     message_log: Arc<EspMutex<MessageLog>>,
@@ -57,7 +58,7 @@ impl Companion {
         global_cfg_db: &SimpleFileDb<FS_SIZE>,
         main_fs: &Arc<EspMutex<ActiveFilesystem<FS_SIZE>>>,
         msg_log: &Arc<EspMutex<MessageLog>>,
-        mesh: &Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
+        mesh: &Arc<EspRwLock<SimpleMesh>>,
         companion_sink: ChannelCompanionSink,
     ) -> CompanionResult<Companion> {
         let pfx = alloc::format!("/companion/{pfx}/");
@@ -128,7 +129,7 @@ impl SimpleMeshLayer for Companion {
         self.companion_sink.write_packet(&saved).await;
         self.message_log.lock().await.push(&saved).await;
 
-        log::info!("DM [{:x}]: {}", contact.key[0], message.as_utf8()?);
+        info!("DM [{:x}]: {}", contact.key[0], message.as_utf8()?);
 
         Ok(())
     }
@@ -145,7 +146,11 @@ impl SimpleMeshLayer for Companion {
         self.companion_sink.write_packet(&saved).await;
         self.message_log.lock().await.push(&saved).await;
 
-        log::info!("group-text [{}]: {}", channel.name, message.as_utf8()?);
+        info!(
+            "group-text [{}]: {}",
+            channel.name.as_str(),
+            message.as_utf8()?
+        );
 
         Ok(())
     }
@@ -195,10 +200,10 @@ impl SimpleMeshLayer for Companion {
         if let Some(rptr_key) = self.login_in_progress.take_if(|v| *v == contact.key) {
             // response is a login resp
             let Ok(res) = LoginResponse::decode(response) else {
-                log::error!("failed to decode login response");
+                error!("failed to decode login response");
                 return Ok(());
             };
-            log::info!("response: {:?}", res);
+            info!("response: {:?}", Debug2Format(&res));
 
             if res.response_code == 0 {
                 // LOGIN_SUCCESS

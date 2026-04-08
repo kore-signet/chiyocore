@@ -1,4 +1,5 @@
 use alloc::{sync::Arc, vec::Vec};
+use chiyo_hal::EspMutex;
 use heapless::CString;
 use litemap::LiteMap;
 use meshcore::crypto::ChannelKeys;
@@ -6,7 +7,7 @@ use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
 use crate::{
-    CompanionResult, EspMutex, FirmwareResult,
+    CompanionResult, FirmwareResult,
     storage::{ActiveFilesystem, FS_SIZE, SimpleFileDb},
 };
 

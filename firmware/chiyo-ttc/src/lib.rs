@@ -4,12 +4,14 @@ extern crate alloc;
 use core::{fmt::Write as _, net::SocketAddr};
 
 use alloc::{sync::Arc, vec::Vec};
+use chiyo_hal::{EspMutex, EspRwLock, embassy_executor, embassy_net, embassy_sync, embassy_time, embedded_io_async, esp_alloc, esp_hal, esp_sync};
 use chiyocore::{
-    CompanionResult, EspMutex, PacketStatus,
+    CompanionResult, PacketStatus,
     builder::BuildChiyocoreLayer,
     meshcore, mk_static,
     simple_mesh::{SimpleMesh, SimpleMeshLayer},
 };
+use defmt::{Debug2Format, error, info};
 use edge_http::Method;
 use edge_nal_embassy::TcpBuffers;
 use embassy_executor::SendSpawner;
@@ -39,7 +41,7 @@ pub struct TTCBot {
     pub channels: [SmolStr; 2],
     pub rtc: Arc<Rtc<'static>>,
     pub req: Sender<'static, esp_sync::RawMutex, (u16, Arc<EspSignal<heapless::String<328>>>), 16>,
-    pub mesh: Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>,
+    pub mesh: Arc<EspRwLock<SimpleMesh>>,
 }
 
 impl SimpleMeshLayer for TTCBot {
@@ -100,8 +102,6 @@ impl SimpleMeshLayer for TTCBot {
             return Ok(());
         };
 
-        log::info!("{}", msg.trim());
-
         if msg.trim() == "!cafe_advert" {
             let message = "cafe/xiaos3: sending advert!";
             let message = TextMessageData::plaintext(
@@ -119,7 +119,7 @@ impl SimpleMeshLayer for TTCBot {
                 longitude: None,
                 feature_1: None,
                 feature_2: None,
-                name: Some(b"cafe/xiaos3".into()),
+                name: Some(b"cafe/chiyobot \xF0\x9F\x8C\x83\xE2\x98\x95".into()),
             };
 
             let random_bytes = rand::Rng::random(&mut Trng::try_new().unwrap());
@@ -388,6 +388,8 @@ async fn ttc_http_task(
 ) {
     let _accel = EspAccelQueueCustom::start();
 
+    stack.wait_config_up().await;
+
     let mut res_buf = Vec::new_in(esp_alloc::ExternalMemory);
     let mut normal_buf = Vec::new_in(esp_alloc::ExternalMemory);
     let mut complete_buf = Vec::new_in(esp_alloc::ExternalMemory);
@@ -426,29 +428,12 @@ async fn ttc_http_task(
         SocketAddr::new(server_ip[0].into(), 443),
     );
 
-    async fn make_req<'a>(
-        complete_buf: &'a mut Vec<u8, esp_alloc::ExternalMemory>,
-        res_buf: &'a mut [u8],
-        _escape_buf: &'a mut [u8],
-        conn: &mut edge_http::io::client::Connection<'_, impl TcpConnect, 32>,
-        path: &str,
-    ) -> Option<TTCRes<'a>> {
-        complete_buf.clear();
-
-        conn.initiate_request(
-            true,
-            Method::Get,
-            path,
-            &[("Host", "webservices.umoiq.com")],
-        )
-        .await
-        .ok()?;
-
-        conn.initiate_response().await.ok()?;
-
+    conn.initiate_request(true, Method::Get, "/service/publicJSONFeed?command=predictions&a=ttc&stopId=5900", &[("Host", "webservices.umoiq.com")]).await.unwrap();
+    conn.initiate_response().await.unwrap();
         loop {
-            let Ok(len) = conn.read(res_buf).await else {
-                return None;
+            let Ok(len) = conn.read(&mut res_buf).await else {
+                // return None;
+                break;
             };
 
             if len == 0 {
@@ -458,116 +443,103 @@ async fn ttc_http_task(
             complete_buf.extend_from_slice(&res_buf[..len]);
         }
 
-        // let Some((v, _)) = serde_json_core::from_slice_escaped(complete_buf, escape_buf).ok() else {
-        //     if let Err(e) = serde_json::from_slice::<TTCRes<'_>>(complete_buf) {
-        //         log::error!("{e}");
-        //     }
-
-        //     return None;
-        // };
-        let Some(v) = serde_json::from_slice::<TTCRes<'_>>(complete_buf).ok() else {
-            return None;
+        let Some(v) = serde_json::from_slice::<TTCRes<'_>>(&complete_buf).ok() else {
+            // return None;
+            error!("parse error");
+            // info!("{}", Debug2Format(&v));
+            return;
         };
+            info!("{}", Debug2Format(&v));
 
-        Some(v)
-    }
+        
 
-    let base_path = "/service/publicJSONFeed?command=predictions&a=ttc&stopId=";
-    let mut escape_buf = [0u8; 128];
+    // async fn make_req<'a>(
+    //     complete_buf: &'a mut Vec<u8, esp_alloc::ExternalMemory>,
+    //     res_buf: &'a mut [u8],
+    //     _escape_buf: &'a mut [u8],
+    //     conn: &mut edge_http::io::client::Connection<'_, impl TcpConnect, 32>,
+    //     path: &str,
+    // ) -> Option<TTCRes<'a>> {
+    //     complete_buf.clear();
 
-    mbedtls_rs::sys::hook::backend::esp::digest::EspSha1::new();
+    //     conn.initiate_request(
+    //         true,
+    //         Method::Get,
+    //         path,
+    //         &[("Host", "webservices.umoiq.com")],
+    //     )
+    //     .await
+    //     .ok()?;
 
-    loop {
-        let (req, res_slot) = rx.receive().await;
+    //     conn.initiate_response().await.ok()?;
 
-        log::info!("{req}");
-        complete_buf.clear();
 
-        let path = heapless::format!(152; "{base_path}{req}").unwrap();
+    //     Some(v)
+    // }
 
-        let res = embassy_time::with_timeout(
-            Duration::from_secs(10),
-            make_req(
-                &mut complete_buf,
-                &mut res_buf,
-                &mut escape_buf,
-                &mut conn,
-                &path,
-            ),
-        )
-        .await;
-        let Ok(res) = res else {
-            log::error!("timeout");
-            continue;
-        };
+    // let base_path = "/service/publicJSONFeed?command=predictions&a=ttc&stopId=";
+    // let mut escape_buf = [0u8; 128];
 
-        let Some(res) = res else {
-            log::error!("err");
-            continue;
-        };
+    // mbedtls_rs::sys::hook::backend::esp::digest::EspSha1::new();
 
-        // log::info!("{res:#?}");
-        let mut directions = heapless::Vec::<(&str, u16, &str), 16>::new();
-        for prediction in res.predictions {
-            let Some(direction) = prediction.direction else {
-                continue;
-            };
-            let Some(actual_prediction) = direction.prediction.first() else {
-                continue;
-            };
-            let Some(minutes) = actual_prediction.minutes.parse::<u16>().ok() else {
-                continue;
-            };
+    // loop {
+    //     let (req, res_slot) = rx.receive().await;
 
-            directions.push((direction.title, minutes, actual_prediction.vehicle));
-        }
+    //     info!("{}", req);
+    //     complete_buf.clear();
 
-        directions.sort_unstable_by_key(|v| v.1);
+    //     let path = heapless::format!(152; "{base_path}{req}").unwrap();
 
-        let mut out = heapless::String::new();
+    //     let res = embassy_time::with_timeout(
+    //         Duration::from_secs(20),
+    //         make_req(
+    //             &mut complete_buf,
+    //             &mut res_buf,
+    //             &mut escape_buf,
+    //             &mut conn,
+    //             &path,
+    //         ),
+    //     )
+    //     .await;
+    //     let Ok(res) = res else {
+    //         error!("timeout");
+    //         continue;
+    //     };
 
-        for (route, minutes, _vehicle) in directions {
-            let minutes_plural = if minutes == 1 { "MINUTE" } else { "MINUTES" };
-            writeln!(&mut out, "{route} - {minutes} {minutes_plural}");
-        }
+    //     let Some(res) = res else {
+    //         error!("err");
+    //         continue;
+    //     };
 
-        res_slot.signal(out);
-
-        // res_slot.signal(val);
-    }
-
-    // let client = DefaultHttpClient::new(&stack);
-    // let mut response_buffer = [0u8; 8192];
-    // let headers = [
-    // HttpHeader::user_agent("Nanofish/0.9.1"),
-    // ];
-    // let v = client.get("https://webservices.umoiq.com/service/publicJSONFeed?command=predictions&a=ttc&stopId=9857", &headers, &mut response_buffer).await.unwrap();
-    // log::info!("{}", v.0.body.as_str().unwrap());
-
-    // let client = DefaultHttpClient::new(unsafe { core::ptr::NonNull::dangling().as_ref() });
-
-    // let custom_headers = [
-    //     HttpHeader { name: "X-Custom-Header", value: "custom-value" },
-    //     HttpHeader::new(headers::ACCEPT, mime_types::JSON),
-    // ];
-    // let (response, bytes_read) = client.get(
-    //     "http://example.com/api/status",
-    //     &headers,
-    //     &mut response_buffer
-    // ).await?;
-
-    //     while let Some(req) = rx.recv().await {
-    //         let cmd = heapless::format!(128; "/service/publicJSONFeed?command=predictions&a=ttc&stopId={req}").unwrap();
-    //         let Ok(res) = resource.get(&cmd).headers(&[("Host", "webservices.umoiq.com")]).send(&mut rx_buf).await else { continue };
-    // //
-    //         let Ok(res_body) = res.body().read_to_end().await else { continue };
-    //         let Ok((v, _)) = serde_json_core::from_slice_escaped::<TTCRes<'_>>(res_body, &mut escape_buf) else {
+    //     // log::info!("{res:#?}");
+    //     let mut directions = heapless::Vec::<(&str, u16, &str), 16>::new();
+    //     for prediction in res.predictions {
+    //         let Some(direction) = prediction.direction else {
+    //             continue;
+    //         };
+    //         let Some(actual_prediction) = direction.prediction.first() else {
+    //             continue;
+    //         };
+    //         let Some(minutes) = actual_prediction.minutes.parse::<u16>().ok() else {
     //             continue;
     //         };
 
-    //         log::info!("{v:#?}");
-
+    //         directions.push((direction.title, minutes, actual_prediction.vehicle));
     //     }
+
+    //     directions.sort_unstable_by_key(|v| v.1);
+
+    //     let mut out = heapless::String::new();
+
+    //     for (route, minutes, _vehicle) in directions {
+    //         let minutes_plural = if minutes == 1 { "MINUTE" } else { "MINUTES" };
+    //         writeln!(&mut out, "{route} - {minutes} {minutes_plural}");
+    //     }
+
+    //     res_slot.signal(out);
+
+    //     // res_slot.signal(val);
+    // }
 }
 
 pub struct EspAccelQueueCustom;

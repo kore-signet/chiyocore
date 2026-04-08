@@ -1,9 +1,12 @@
 use alloc::sync::Arc;
+use chiyo_hal::{EspMutex, EspRwLock};
 use chiyocore::{
-    EspMutex,
     builder::BuildChiyocoreLayer,
     meshcore,
-    simple_mesh::storage::channel::{Channel, ChannelStorage},
+    simple_mesh::{
+        SimpleMesh,
+        storage::channel::{Channel, ChannelStorage},
+    },
 };
 use meshcore::crypto::ChannelKeys;
 
@@ -16,9 +19,7 @@ impl BuildChiyocoreLayer for Companion {
     async fn build<T: 'static>(
         spawner: &embassy_executor::Spawner,
         chiyocore: &chiyocore::builder::Chiyocore<T, chiyocore::builder::ChiyocoreSetupData>,
-        mesh: &alloc::sync::Arc<
-            embassy_sync::rwlock::RwLock<esp_sync::RawMutex, chiyocore::simple_mesh::SimpleMesh>,
-        >,
+        mesh: &alloc::sync::Arc<EspRwLock<SimpleMesh>>,
         config: &Self::Input,
     ) -> Self::Output {
         add_channels(&mut *chiyocore.mesh_storage().channels.write().await).await;
@@ -42,8 +43,8 @@ impl BuildChiyocoreLayer for Companion {
             .unwrap(),
         ));
 
-        spawner
-            .spawn(crate::companion_protocol::tcp::tcp_companion(
+        spawner.spawn(
+            crate::companion_protocol::tcp::tcp_companion(
                 chiyocore
                     .setup_data
                     .net_stack
@@ -51,8 +52,9 @@ impl BuildChiyocoreLayer for Companion {
                 tcp_rx,
                 Arc::clone(&companion),
                 config.tcp_port,
-            ))
-            .unwrap();
+            )
+            .unwrap(),
+        );
 
         companion
     }

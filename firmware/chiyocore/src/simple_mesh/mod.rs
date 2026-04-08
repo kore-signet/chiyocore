@@ -1,4 +1,4 @@
-use core::{ops::DerefMut, time::Duration};
+use core::time::Duration;
 
 use crate::{
     PacketStatus,
@@ -6,6 +6,8 @@ use crate::{
 };
 use alloc::{borrow::Cow, string::String, sync::Arc, vec::Vec};
 use arrayref::array_ref;
+use chiyo_hal::{embassy_futures, embassy_sync, embassy_time, esp_hal, esp_sync};
+use defmt::{Debug2Format, error, info, trace};
 use embassy_executor::SendSpawner;
 use embassy_sync::rwlock::RwLock;
 use esp_hal::rtc_cntl::Rtc;
@@ -23,7 +25,7 @@ use meshcore::{
 };
 
 use crate::{
-    BumpaloVec, CompanionError, CompanionResult, EspMutex, MeshcoreHandler,
+    BumpaloVec, CompanionError, CompanionResult, MeshcoreHandler,
     crypto::{HardwareAES, HardwareHMAC, HardwareSHA},
     lora::LoraTaskChannel,
     simple_mesh::storage::{
@@ -101,17 +103,17 @@ impl SimpleMesh {
         let wait_map = Arc::clone(&mesh.read().await.ack_table);
         let wait_cell = Arc::new(WaitCell::new());
 
-        SendSpawner::for_current_executor()
-            .await
-            .spawn(send_with_retry(
+        SendSpawner::for_current_executor().await.spawn(
+            send_with_retry(
                 wait_map,
                 message,
                 identity,
                 mesh,
                 path,
                 Arc::clone(&wait_cell),
-            ))
-            .unwrap();
+            )
+            .unwrap(),
+        );
 
         Ok(wait_cell)
     }
@@ -377,7 +379,7 @@ async fn send_with_retry(
     let mut has_flooded = false;
     // let mut has_flooded = path.is_none();
     while attempt <= 3 {
-        log::info!("retrying msg, attempt {attempt}");
+        info!("retrying msg, attempt {}", attempt);
         message.header = message.header.with_attempt(attempt);
 
         let expected_ack =
@@ -434,10 +436,9 @@ impl SimpleMesh {
         payload: &EncryptedMessageWithDst<'_, T>,
         scratch: &'a mut BumpaloVec<'b, u8>,
     ) -> CompanionResult<Option<(CachedContact, DecryptedView<'a, T>)>> {
-        log::trace!(
-            "\ttext msg | {src:x}->{dst:x}",
-            src = payload.source_hash,
-            dst = payload.destination_hash
+        trace!(
+            "\ttext msg | {:x}->{:x}",
+            payload.source_hash, payload.destination_hash
         );
 
         if self.identity.pubkey()[0] != payload.destination_hash {
@@ -457,7 +458,7 @@ impl SimpleMesh {
             let shared_secret = self.key_cache.get_key(&other_ident.as_identity()).await;
 
             if !payload.verify::<HardwareHMAC>(array_ref![&shared_secret, 0, 32]) {
-                log::error!("\tmessage failed verify, trying next contact");
+                error!("\tmessage failed verify, trying next contact");
                 contact_idx += 1;
                 continue;
             }
@@ -466,7 +467,7 @@ impl SimpleMesh {
                 .decrypt::<HardwareAES>(array_ref![&shared_secret, 0, 16], scratch)
                 .await
             else {
-                log::error!("\tmessage failed to decrypt");
+                error!("\tmessage failed to decrypt");
                 return Err(CompanionError::DecryptFailure);
             };
 
@@ -481,7 +482,7 @@ impl SimpleMesh {
         payload: &GroupText<'_>,
         scratch: &'s mut impl ByteVecImpl,
     ) -> CompanionResult<Option<(Channel, DecryptedView<'s, TextMessageData<'static>>)>> {
-        log::trace!("\tgroup msg | channel: {:x}", payload.channel);
+        trace!("\tgroup msg | channel: {:x}", payload.channel);
         let Some(channel) = self
             .storage
             .channels
@@ -490,20 +491,20 @@ impl SimpleMesh {
             .get_by_hash(payload.channel)
             .cloned()
         else {
-            log::error!("\t(no keys for channel)");
+            error!("\t(no keys for channel)");
             return Err(CompanionError::NoKnownChannel);
         };
 
-        log::trace!("\t<{}>", channel.name);
+        trace!("\t<{}>", channel.name.as_str());
         let verify = payload.verify::<HardwareHMAC>(&channel.key);
-        log::trace!("\tverify: {verify}");
+        trace!("\tverify: {}", verify);
         if !verify {
-            log::error!("\tmac check failed, returning");
+            error!("\tmac check failed, returning");
             return Err(CompanionError::VerifyFailure);
         }
 
         let Ok(txt_bytes) = payload.decrypt::<HardwareAES>(&channel.key, scratch).await else {
-            log::error!("\tfailed decrypt");
+            error!("\tfailed decrypt");
             return Err(CompanionError::DecryptFailure);
         };
 
@@ -603,7 +604,7 @@ impl SimpleMesh {
         payload: Advert<'_>,
         layers: &mut impl SimpleMeshLayer,
     ) -> CompanionResult<()> {
-        log::info!("\tadvert | from {:x}", payload.public_key[0]);
+        info!("\tadvert | from {:x}", payload.public_key[0]);
         let Some(appdata) = payload.appdata.as_ref() else {
             return Ok(());
         };
@@ -615,7 +616,7 @@ impl SimpleMesh {
         else {
             return Ok(());
         };
-        log::info!("\tname: {name}");
+        info!("\tname: {}", name);
 
         self.storage
             .contacts
@@ -707,7 +708,7 @@ impl SimpleMesh {
             return Ok(());
         };
 
-        log::info!("decoded response");
+        info!("decoded response");
 
         let decoded = res.decoded()?;
         layers
@@ -732,7 +733,7 @@ impl SimpleMesh {
             return Ok(());
         };
 
-        log::info!("decoded request");
+        info!("decoded request");
 
         let decoded = res.decoded()?;
         layers
@@ -759,7 +760,7 @@ impl SimpleMesh {
         let shared_key = self.identity.shared_secret(&other_ident);
 
         if !message.verify::<HardwareHMAC>(array_ref![&shared_key, 16, 16]) {
-            log::error!("\tanon req failed verify");
+            error!("\tanon req failed verify");
             return Err(CompanionError::VerifyFailure);
         }
 
@@ -800,9 +801,9 @@ impl SimpleMesh {
             .trace_packet(self, packet, packet_status, snrs, &message)
             .await?;
 
-        log::info!(
+        info!(
             "\ttrace | path: {:?} | snrs: {:?}",
-            message.path,
+            Debug2Format(&message.path),
             snrs.iter().map(|v| *v as f32 / 4.0).collect::<Vec<_>>()
         );
 

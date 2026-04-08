@@ -1,8 +1,7 @@
 [target.xtensa-esp32s3-none-elf]
-runner = "espflash flash --monitor --chip esp32s3 --partition-table partitions.csv"
+runner = "espflash flash --monitor --chip esp32s3 --partition-table partitions.csv --log-format defmt"
 
 [env]
-ESP_LOG="info"
 CC = "xtensa-esp32s3-elf-cc"
 AR = "xtensa-esp32s3-elf-ar"
 CFLAGS = "-mlongcalls"

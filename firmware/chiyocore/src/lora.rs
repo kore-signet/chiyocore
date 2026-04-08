@@ -1,3 +1,9 @@
+use chiyo_hal::{
+    EspMutex, embassy_embedded_hal, embassy_executor, embassy_futures, embassy_sync, embassy_time,
+    esp_hal, esp_sync,
+};
+use defmt::{Debug2Format, error, info, trace};
+
 use core::time::Duration;
 
 use alloc::sync::Arc;
@@ -19,7 +25,7 @@ use static_cell::StaticCell;
 use thingbuf::{mpsc::StaticChannel, recycling::DefaultRecycle};
 
 use crate::{
-    DataWithSnr, EspMutex, FirmwareError, FirmwareResult, MeshcoreHandler,
+    DataWithSnr, FirmwareError, FirmwareResult, MeshcoreHandler,
     simple_mesh::{MeshLayerGet, SimpleMesh, SimpleMeshLayer, WithLayer},
 };
 
@@ -239,7 +245,7 @@ impl Radio {
         while tries < 5 {
             self.lora.prepare_for_cad(&self.modulation_params).await?;
             if self.lora.cad(&self.modulation_params).await? {
-                log::info!("\tcad attempt {tries} | failed, waiting");
+                info!("\tcad attempt {} | failed, waiting", tries);
                 tries += 1;
 
                 let jitter = esp_hal::rng::Rng::new().random_range(50..200);
@@ -247,7 +253,7 @@ impl Radio {
 
                 embassy_time::Timer::after_millis(backoff_ms.min(5000)).await;
             } else {
-                log::info!("\tcad: sucess, doing send");
+                info!("\tcad: sucess, doing send");
                 return Ok(());
             }
         }
@@ -287,7 +293,7 @@ impl Radio {
         let mut needs_rx_restart = false;
         loop {
             if let Ok(to_send) = to_send.try_recv_ref() {
-                log::info!("lora tx");
+                info!("lora tx");
                 self.tx(&to_send).await?;
                 needs_rx_restart = true;
                 continue;
@@ -323,7 +329,7 @@ impl Radio {
                     needs_rx_restart = false;
                 }
                 Err(err) => {
-                    log::error!("radio error: {err:?}");
+                    error!("radio error: {:?}", Debug2Format(&err));
                     return Err(err.into());
                 }
             }
@@ -342,7 +348,7 @@ impl Radio {
                 }
                 Either::Second(Some(to_send)) => {
                     // self.lora.
-                    log::info!("lora tx");
+                    info!("lora tx");
                     self.tx(&to_send).await?;
                     needs_rx_restart = true;
                 }
@@ -359,7 +365,7 @@ pub async fn lora_task(
 ) {
     loop {
         if let Err(e) = radio.run(&mut received, &mut to_send).await {
-            log::error!("lora task crashed: {e:?}. restarting");
+            error!("lora task crashed: {:?}. restarting", e);
         }
     }
 }
@@ -401,9 +407,7 @@ impl LoraTaskChannel {
         let (transmit_tx, transmit_rx) = LORA_TRANSMIT_CHANNEL.split();
         let radio = Radio::new(lora).unwrap();
 
-        spawner
-            .spawn(lora_task(radio, receive_tx, transmit_rx))
-            .unwrap();
+        spawner.spawn(lora_task(radio, receive_tx, transmit_rx).unwrap());
         (
             LoraTaskChannel {
                 // scratch: [0u8; 256],
@@ -436,17 +440,17 @@ impl LoraTaskChannel {
             // layer.with_layer(ctx).await;
             handler.run(&packet, rx_slot.1, &rx_slot.0[..]).await;
 
-            log::info!("packet took: {}", start.elapsed());
+            info!("packet took: {}", start.elapsed());
         }
     }
 
     // TODO: support delaying
     pub async fn send_packet(&self, packet: &Packet<'_>) -> Duration {
-        log::info!(
+        info!(
             "tx | {:?} | {:?} (path: {:?})",
-            packet.header.payload_type(),
-            packet.header.route_type(),
-            packet.path
+            Debug2Format(&packet.header.payload_type()),
+            Debug2Format(&packet.header.route_type()),
+            Debug2Format(&packet.path)
         );
 
         let mut slot = self.tx.send_ref().await.unwrap();
@@ -463,7 +467,11 @@ impl LoraTaskChannel {
         payload: &P::Representation<'_>,
         path: Path<'_>,
     ) -> Duration {
-        log::info!("tx | {:?} | direct (path: {:?})", P::PAYLOAD_TYPE, path);
+        info!(
+            "tx | {:?} | direct (path: {:?})",
+            Debug2Format(&P::PAYLOAD_TYPE),
+            Debug2Format(&path)
+        );
 
         let mut scratch = [0u8; 256];
 
@@ -491,7 +499,11 @@ impl LoraTaskChannel {
         payload: &P::Representation<'_>,
         path: Path<'_>,
     ) -> Duration {
-        log::info!("tx | {:?} | flood (path: {:?})", P::PAYLOAD_TYPE, path);
+        info!(
+            "tx | {:?} | flood (path: {:?})",
+            Debug2Format(&P::PAYLOAD_TYPE),
+            Debug2Format(&path)
+        );
         let mut scratch = [0u8; 256]; // todo: is this better than alloc'ing :?
         let payload_buf = P::encode(payload, &mut scratch).unwrap();
         let packet = Packet {
@@ -515,12 +527,11 @@ impl LoraTaskChannel {
         let mut out = heapless::Vec::new();
         let _ = Packet::encode_into_vec(packet, &mut out);
 
-        log::trace!("sending packet with delay: {}ms", delay.as_millis() as u64);
+        trace!("sending packet with delay: {}ms", delay.as_millis() as u64);
 
         SendSpawner::for_current_executor()
             .await
-            .spawn(send_delayed(self.tx.clone(), out, delay))
-            .unwrap();
+            .spawn(send_delayed(self.tx.clone(), out, delay).unwrap());
 
         airtime
     }
@@ -540,7 +551,7 @@ impl<'a, 'b, 'h> WithLayer for PacketContext<'a, 'b, 'h> {
             .packet(self.packet, self.packet_status, self.bytes, &mut layer)
             .await
         {
-            log::error!("handler error: {e:?}");
+            error!("handler error: {:?}", e);
         }
     }
 }

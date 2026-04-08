@@ -7,6 +7,10 @@
 use core::marker::PhantomData;
 
 use alloc::sync::Arc;
+use chiyo_hal::{
+    EspMutex, embassy_net, embassy_sync, embassy_time, esp_hal, esp_storage, esp_sync,
+};
+use defmt::info;
 use embassy_executor::Spawner;
 use embassy_sync::rwlock::RwLock;
 use esp_hal::{
@@ -24,7 +28,7 @@ use ouroboros::self_referencing;
 use thingbuf::mpsc::StaticReceiver;
 
 use crate::{
-    DataWithSnr, EspMutex,
+    DataWithSnr,
     lora::{LoraPins, LoraTaskChannel, TaskChannelHandler},
     partition_table,
     simple_mesh::{
@@ -82,6 +86,7 @@ impl<L: BuildChiyocoreLayer> BuildChiyocoreSet for ChiyocoreNode<L> {
             chiyocore.lora_channel.clone(),
             chiyocore.rtc(),
         )));
+        spawner.spawn(heap_log(Arc::clone(&mesh)).unwrap());
         let layers = L::build(spawner, chiyocore, &mesh, config).await;
         (mesh, layers)
     }
@@ -101,6 +106,17 @@ pub struct Chiyocore<L: 'static, D> {
     pub lora_rx: StaticReceiver<DataWithSnr>,
     pub setup_data: D,
     hosted_node: Option<L>, // hosted_nodes: Vec<Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>>
+}
+
+#[embassy_executor::task]
+async fn heap_log(mesh: Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>) {
+    loop {
+        info!(
+            "simplemesh scratch use: {} bytes",
+            mesh.read().await.scratch.allocated_bytes()
+        );
+        embassy_time::Timer::after_secs(120).await;
+    }
 }
 
 impl<T: 'static> Chiyocore<T, ChiyocoreSetupData> {
@@ -135,12 +151,9 @@ impl<T: 'static> Chiyocore<T, ChiyocoreSetupData> {
     ) -> embassy_net::Stack<'static> {
         let net_stack = crate::wifi::wifi_init(wifi, spawner, ssid.into(), password.into()).await;
 
-        spawner
-            .spawn(crate::ntp::ntp_task(
-                net_stack,
-                Arc::clone(&self.base_peripherals.rtc),
-            ))
-            .unwrap();
+        spawner.spawn(
+            crate::ntp::ntp_task(net_stack, Arc::clone(&self.base_peripherals.rtc)).unwrap(),
+        );
 
         self.setup_data.net_stack = Some(net_stack);
 

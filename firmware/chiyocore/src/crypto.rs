@@ -1,3 +1,4 @@
+use chiyo_hal::esp_hal;
 use esp_hal::aes::{AesContext, cipher_modes::Ecb};
 use hmac::SimpleHmac;
 use meshcore::{

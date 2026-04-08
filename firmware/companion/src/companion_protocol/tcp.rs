@@ -1,5 +1,8 @@
 use alloc::boxed::Box;
 use alloc::{sync::Arc, vec::Vec};
+use chiyo_hal::EspMutex;
+use chiyo_hal::{embassy_futures, embassy_net, embassy_time, embedded_io_async};
+use defmt::{Debug2Format, error, info};
 use embassy_net::tcp::{State, TcpSocket};
 use embassy_time::Duration;
 use embedded_io_async::Write;
@@ -10,7 +13,7 @@ use crate::companion_protocol::protocol::{CompanionSer, CompanionSink};
 use crate::companionv2::Companion;
 // use crate::ping_bot::PingBot;
 use crate::companion_protocol;
-use chiyocore::{EspMutex, meshcore};
+use chiyocore::meshcore;
 
 // pub static TCP_COMPANION_CHANNEL: StaticChannel<SmallVec<[u8; 256]>, 2> = StaticChannel::new();
 
@@ -53,9 +56,9 @@ pub async fn tcp_companion(
     tcp.set_nagle_enabled(false);
 
     loop {
-        log::info!("connecting as companion...");
+        info!("connecting as companion...");
         tcp.accept(port).await.unwrap();
-        log::info!("companion connected!");
+        info!("companion connected!");
 
         'recv_loop: loop {
             let wait_closed = async {
@@ -94,30 +97,30 @@ pub async fn tcp_companion(
                         )
                         .await
                         {
-                            log::error!("err: {e:?}");
+                            error!("err: {:?}", Debug2Format(&e));
                         }
 
                         if let Err(e) = tcp.flush().await {
-                            log::error!("err: {e:?}");
+                            error!("err: {:?}", e);
                             break 'recv_loop;
                         }
                     }
                 }
                 embassy_futures::select::Either3::Second(packet) => {
-                    log::info!("tcp tx");
+                    info!("tcp tx");
                     let Some(packet) = packet else { continue };
                     if let Err(e) = tcp.write_all(&packet[..]).await {
-                        log::error!("err: {e:?}");
+                        error!("err: {:?}", e);
                         break 'recv_loop;
                     }
 
                     if let Err(e) = tcp.flush().await {
-                        log::error!("err: {e:?}");
+                        error!("err: {:?}", e);
                         break 'recv_loop;
                     }
                 }
                 embassy_futures::select::Either3::Third(_) => {
-                    log::error!("reset");
+                    error!("reset");
                     break 'recv_loop;
                 }
             }

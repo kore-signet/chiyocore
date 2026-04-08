@@ -7,6 +7,7 @@ use core::{
 
 use super::*;
 use alloc::vec::Vec;
+use chiyo_hal::esp_alloc;
 use litemap::store::{
     Store, StoreBulkMut, StoreConstEmpty, StoreFromIterable, StoreFromIterator, StoreIntoIterator,
     StoreIterable, StoreIterableMut, StoreMut, StoreSlice,

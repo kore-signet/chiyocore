@@ -6,14 +6,15 @@ extern crate alloc;
 use alloc::sync::Arc;
 use chiyocore::builder::{Chiyocore, ChiyocorePeripherals, ChiyocoreSetupData};
 use chiyocore::meshcore;
-use chiyocore::ping_bot::PingBot;
-use chiyocore_companion::companionv2::Companion;
 use embassy_executor::Spawner;
 
 use chiyocore::simple_mesh::storage::channel::Channel;
 use meshcore::crypto::ChannelKeys;
 
-use esp_backtrace as _;
+use chiyo_hal::{embassy_time, esp_rtos};
+
+use chiyo_hal::esp_backtrace as _;
+use chiyo_hal::esp_println as _;
 use esp_hal::clock::CpuClock;
 use esp_hal::rng::Trng;
 use esp_hal::system::Stack;
@@ -23,10 +24,8 @@ use litemap::LiteMap;
 // use chiyocore::handler::{BasicHandlerManager, ContactManager, HandlerStorage};
 use alloc::borrow::Cow;
 use chiyocore::builder::{BuildChiyocoreLayer, BuildChiyocoreSet, ChiyocoreNode};
-use chiyocore::simple_mesh::MeshLayerGet;
 use chiyocore::static_cell::StaticCell;
 use chiyocore::storage::SimpleFileDb;
-use chiyocore::EspMutex;
 use core::ffi::CStr;
 use meshcore::identity::LocalIdentity;
 use smol_str::SmolStr;
@@ -53,11 +52,10 @@ async fn load_node_slot<const FS_SIZE: usize, T: chiyocore::builder::BuildChiyoc
 #[embassy_executor::task]
 async fn run_handler(
     chiyocore: Chiyocore<
-        <(ChiyocoreNode<(
-            chiyocore_companion::companionv2::Companion,
-            chiyocore::ping_bot::PingBot,
-            chiyocore_ttc::TTCBot,
-        )>) as BuildChiyocoreSet>::Output,
+        <ChiyocoreNode<(
+                chiyocore_companion::companionv2::Companion,
+                chiyocore::ping_bot::PingBot,
+            )> as BuildChiyocoreSet>::Output,
         (),
     >,
 ) {
@@ -67,8 +65,6 @@ async fn run_handler(
 #[allow(clippy::large_stack_frames)]
 #[esp_rtos::main]
 async fn main(spawner: Spawner) -> ! {
-    esp_println::logger::init_logger_from_env();
-
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
@@ -164,7 +160,7 @@ async fn main(spawner: Spawner) -> ! {
         .await;
 
     net_stack.wait_config_up().await;
-    log::info!(
+    defmt::info!(
         "network connected - ip {}",
         net_stack.config_v4().unwrap().address
     );
@@ -172,16 +168,15 @@ async fn main(spawner: Spawner) -> ! {
     let chiyocore = chiyocore
         .add_node(
             &spawner,
-            (load_node_slot::<
+            load_node_slot::<
                 _,
                 (
                     chiyocore_companion::companionv2::Companion,
                     chiyocore::ping_bot::PingBot,
-                    chiyocore_ttc::TTCBot,
                 ),
             >(c"chiyo0", &slot_db)
-            .await),
-            &((
+            .await,
+            &(
                 chiyocore_config::CompanionConfig {
                     id: Cow::Borrowed("companion-0"),
                     tcp_port: 5000,
@@ -190,8 +185,7 @@ async fn main(spawner: Spawner) -> ! {
                     name: Cow::Borrowed("cafe / chiyobot 🌃☕"),
                     channels: Cow::Owned(["#test".into(), "#emitestcorner".into()].into()),
                 },
-                (),
-            )),
+            ),
         )
         .await;
 
@@ -208,7 +202,7 @@ async fn main(spawner: Spawner) -> ! {
             static EXECUTOR: StaticCell<Executor> = StaticCell::new();
             let executor = EXECUTOR.init(Executor::new());
             executor.run(|spawner| {
-                spawner.spawn(run_handler(chiyocore)).unwrap();
+                spawner.spawn(run_handler(chiyocore).unwrap());
             });
         },
     );

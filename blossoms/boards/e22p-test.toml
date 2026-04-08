@@ -5,8 +5,8 @@ psram = true
 
 [pins]
 sclk = "GPIO7"
-mosi = "GPIO9"
-miso = "GPIO8"
+mosi = "GPIO8"
+miso = "GPIO9"
 reset = "GPIO43"
 busy = "GPIO6"
 dio1 = "GPIO5"

@@ -1,11 +1,13 @@
 use crate::{
-    CompanionResult, EspMutex,
+    CompanionResult,
     simple_mesh::{
         SimpleMesh,
         storage::{channel::Channel, contact::CachedContact},
     },
 };
 use alloc::sync::Arc;
+use chiyo_hal::embassy_sync;
+use chiyo_hal::{EspMutex, esp_sync};
 use core::ops::DerefMut;
 use embassy_sync::rwlock::RwLock;
 use futures_util::FutureExt;
@@ -283,7 +285,7 @@ impl<L: SimpleMeshLayer + Send + 'static> MeshLayerGet for Arc<EspMutex<L>> {
 macro_rules! impl_mesh_layer_tuple {
     ($join:path; $($var:ident),*) => {
         #[allow(non_snake_case)]
-        impl <$($var),*> MeshLayerGet for ($(Arc<RwLock<esp_sync::RawMutex, $var>>),*) where $($var: SimpleMeshLayer + Send + 'static),* {
+        impl <$($var),*> MeshLayerGet for ($(Arc<RwLock<chiyo_hal::esp_sync::RawMutex, $var>>),*) where $($var: SimpleMeshLayer + Send + 'static),* {
             type Layer<'a> = ($(&'a mut $var),*);
 
                 async fn with_layer(&self, f: impl WithLayer) {
@@ -299,7 +301,7 @@ macro_rules! impl_mesh_layer_tuple {
         }
 
         #[allow(non_snake_case)]
-        impl <$($var),*> MeshLayerGet for ($(Arc<EspMutex<$var>>),*) where $($var: SimpleMeshLayer + Send + 'static),* {
+        impl <$($var),*> MeshLayerGet for ($(Arc<chiyo_hal::EspMutex<$var>>),*) where $($var: SimpleMeshLayer + Send + 'static),* {
             type Layer<'a> = ($(&'a mut $var),*);
 
                 async fn with_layer(&self, f: impl WithLayer) {
@@ -537,18 +539,18 @@ macro_rules! impl_mesh_layer_tuple {
 }
 
 impl_mesh_layer_tuple!(
-    embassy_futures::join::join;
+     chiyo_hal::embassy_futures::join::join;
     A,B
 );
 impl_mesh_layer_tuple!(
-    embassy_futures::join::join3;
+     chiyo_hal::embassy_futures::join::join3;
     A,B,C
 );
 impl_mesh_layer_tuple!(
-    embassy_futures::join::join4;
+    chiyo_hal::embassy_futures::join::join4;
     A,B,C,D
 );
 impl_mesh_layer_tuple!(
-    embassy_futures::join::join5;
+     chiyo_hal::embassy_futures::join::join5;
     A,B,C,D,F
 );

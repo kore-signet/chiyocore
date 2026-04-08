@@ -1,5 +1,6 @@
 use alloc::borrow::Cow;
 use arrayref::array_ref;
+use chiyo_hal::{EspMutex, esp_hal};
 use esp_hal::sha::Sha1Context;
 use meshcore::{
     Packet, PayloadType,
@@ -7,10 +8,7 @@ use meshcore::{
 };
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    EspMutex,
-    simple_mesh::storage::{channel::Channel, contact::CachedContact},
-};
+use crate::simple_mesh::storage::{channel::Channel, contact::CachedContact};
 
 pub struct HashLog<const CAPACITY: usize> {
     log: EspMutex<heapless::Deque<[u8; 20], CAPACITY>>,

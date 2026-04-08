@@ -24,7 +24,7 @@ ChiyocoreConfig(
             "#emitestcorner"
           ]
         ),
-        TTCBot
+        // TTCBot
       ]
     ),
     // Node(

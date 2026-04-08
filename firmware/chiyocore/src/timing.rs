@@ -1,5 +1,6 @@
 use core::time::Duration;
 
+use chiyo_hal::esp_hal;
 use meshcore::{Packet, SerDeser, timing::AirtimeEstConfig};
 
 const DIRECT_TX_DELAY: Duration = Duration::from_millis(500);

@@ -1,12 +1,11 @@
 use alloc::{format, sync::Arc, vec::Vec};
+use chiyo_hal::{EspMutex, embassy_sync, esp_hal, esp_sync};
 use chiyocore_config::PingBotConfig;
 use esp_hal::rtc_cntl::Rtc;
 use meshcore::payloads::TextMessageData;
 use smol_str::{SmolStr, ToSmolStr};
 
-use crate::{
-    CompanionResult, EspMutex, builder::BuildChiyocoreLayer, simple_mesh::SimpleMeshLayer,
-};
+use crate::{CompanionResult, builder::BuildChiyocoreLayer, simple_mesh::SimpleMeshLayer};
 
 pub struct PingBot {
     pub rtc: Arc<Rtc<'static>>,
@@ -53,8 +52,6 @@ impl SimpleMeshLayer for PingBot {
         let Some((user, msg)) = msg.split_once(':') else {
             return Ok(());
         };
-
-        log::info!("{}", msg.trim());
 
         if msg.trim() == "!ping" {
             let message = format!(

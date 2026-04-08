@@ -64,7 +64,7 @@ ChiyocoreConfig(
 ```
 
 ### run it
-`./flash.sh blossoms/boards/<your-board-here.toml> blossoms/setups/<your-setup-here.ron>`
+`./flash.sh --log-level "info" -b <blossoms/boards/<your-board-here.toml> -s <blossoms/setups/<your-setup-here.ron>`
 
 
 with meshcore-cli:

@@ -1,5 +1,6 @@
 use alloc::vec;
 use alloc::vec::Vec;
+use chiyo_hal::embassy_embedded_hal;
 use sequential_storage::{
     cache::PagePointerCache,
     queue::{QueueConfig, QueueStorage},

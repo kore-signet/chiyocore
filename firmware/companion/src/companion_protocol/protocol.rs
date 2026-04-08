@@ -146,8 +146,8 @@ pub mod responses {
         }
     }
 
-    impl From<esp_hal::aes::Error> for Err {
-        fn from(_value: esp_hal::aes::Error) -> Self {
+    impl From<chiyo_hal::esp_hal::aes::Error> for Err {
+        fn from(_value: chiyo_hal::esp_hal::aes::Error) -> Self {
             Err { code: None }
         }
     }

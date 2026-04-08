@@ -1,5 +1,6 @@
 fn main() {
     linker_be_nice();
+    println!("cargo:rustc-link-arg=-Tdefmt.x");
     println!("cargo:rustc-link-arg=-Tlinkall.x");
 }
 
@@ -66,5 +67,4 @@ fn linker_be_nice() {
         "cargo:rustc-link-arg=-Wl,--error-handling-script={}",
         std::env::current_exe().unwrap().display()
     );
-
 }

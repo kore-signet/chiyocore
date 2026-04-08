@@ -1,11 +1,10 @@
 use core::{ffi::CStr, ops::Deref};
 
 use alloc::{
-    string::{String, ToString},
     sync::Arc,
     vec::Vec,
 };
-use base64::{Engine, prelude::BASE64_URL_SAFE};
+use chiyo_hal::{embedded_storage, esp_storage, esp_sync};
 use embedded_storage::nor_flash::ReadNorFlash;
 use esp_storage::FlashStorage;
 use littlefs2::{consts::U256, fs::Filesystem, path::Path};
@@ -15,7 +14,8 @@ use serde::{Serialize, de::DeserializeOwned};
 /// Size of the main data fs.
 pub const FS_SIZE: usize = partition_table::MESHCORE_DATA.size as usize;
 
-use crate::{EspMutex, FirmwareError, FirmwareResult, partition_table};
+use crate::{FirmwareError, FirmwareResult, partition_table};
+use chiyo_hal::EspMutex;
 
 /// A single flash partition, backed by a shared/locked reference to the flash driver.
 pub struct FsPartition<const SIZE: usize> {

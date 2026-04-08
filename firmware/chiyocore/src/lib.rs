@@ -15,7 +15,7 @@ pub mod storage;
 pub mod timing;
 pub mod wifi;
 
-use embassy_sync::watch::Watch;
+use chiyo_hal::esp_hal;
 pub use lora_phy::mod_params::PacketStatus;
 pub use meshcore;
 
@@ -35,20 +35,17 @@ extern crate alloc;
 
 // pub type LittleFs = Arc<EspMutex<littlefs2::>;
 
-pub type EspMutex<T> = embassy_sync::mutex::Mutex<esp_sync::RawMutex, T>;
-pub type SyncEspMutex<T> = esp_sync::NonReentrantMutex<T>;
 pub type BumpaloVec<'a, T> = bumpalo::collections::Vec<'a, T>;
-pub type EspWatch<T, const N: usize> = Watch<esp_sync::RawMutex, T, N>;
 
 pub use static_cell;
 
-#[derive(Debug)]
+#[derive(Debug, defmt::Format)]
 pub enum FirmwareError {
     // #[error("storage: {0:?}")]
-    Storage(littlefs2::io::Error),
+    Storage(#[defmt(Debug2Format)] littlefs2::io::Error),
     // #[error("radio: {0:?}")]
-    LoRa(lora_phy::mod_params::RadioError),
-    Postcard(postcard::Error),
+    LoRa(#[defmt(Debug2Format)] lora_phy::mod_params::RadioError),
+    Postcard(#[defmt(Debug2Format)] postcard::Error),
 }
 
 impl From<littlefs2::io::Error> for FirmwareError {
@@ -103,14 +100,14 @@ macro_rules! mk_static {
     }};
 }
 
-#[derive(Debug)]
+#[derive(Debug, defmt::Format)]
 pub enum CompanionError {
     NoKnownChannel,
     NoKnownContact,
     DecryptFailure,
     VerifyFailure,
     AesFailure(esp_hal::aes::Error),
-    DecodeFailure(DecodeError),
+    DecodeFailure(#[defmt(Debug2Format)] DecodeError),
     Firmware(FirmwareError),
 }
 

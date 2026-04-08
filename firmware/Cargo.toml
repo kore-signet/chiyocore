@@ -1,5 +1,5 @@
 [workspace]
-members = ["chiyocore", "companion", "firmware", "chiyo-ttc"]
+members = ["chiyocore", "companion", "chiyo-hal", "firmware"]
 resolver = "3"
 
 [workspace.lints.clippy]
@@ -52,13 +52,10 @@ opt-level = 3
 [profile.dev.package.esp-println]
 opt-level = 3
 
-[profile.dev.package.p384]
-opt-level = 3
-debug = false
+# [profile.dev.package.p384]
+# opt-level = 3
+# debug = false
 
 [profile.dev.package.mbedtls-rs]
 opt-level = 3
 
-
-[patch.crates-io]
-esp-hal = { git = "https://github.com/esp-rs/esp-hal.git", rev = "ab7a8e746c292c9c7c5a39a7fc9e4d8c01e70cbf", features = ["esp32s3", "log-04", "psram", "unstable"] }

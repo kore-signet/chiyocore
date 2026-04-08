@@ -1,6 +1,6 @@
 use alloc::{borrow::Cow, string::String};
+use chiyo_hal::esp_hal::rng::Trng;
 use ed25519_compact::Noise;
-use esp_hal::rng::Trng;
 use meshcore::{
     Packet, PacketHeader, Path, PayloadType, RouteType, SerDeser,
     crypto::ChannelKeys,
