@@ -1,0 +1,66 @@
+[workspace]
+members = ["chiyocore", "companion", "chiyo-hal"]
+resolver = "3"
+
+[workspace.lints.clippy]
+unused_async = "deny"
+type_complexity = "allow"
+# large_stack_frames = "warn"
+large_futures = "warn"
+
+[workspace.lints.rust]
+non_snake_case = "allow"
+
+[profile.dev]
+# Rust debug is too slow.
+# For debug builds always builds with some optimization
+opt-level = "s"
+incremental = true
+
+[profile.release]
+codegen-units = 1        # LLVM can perform better optimizations using a single thread
+debug = 2
+debug-assertions = false
+incremental = false
+lto = 'fat'
+opt-level = 's'
+overflow-checks = false
+
+[profile.dev.package.esp-radio]
+opt-level = 3
+
+[profile.dev.package.esp-hal]
+opt-level = 3
+
+[profile.dev.package.esp-storage]
+opt-level = 3
+
+[profile.dev.package.esp-sync]
+opt-level = 3
+
+[profile.dev.package.esp-rtos]
+opt-level = 3
+
+[profile.dev.package.esp-bootloader-esp-idf]
+opt-level = 3
+
+[profile.dev.package.esp-alloc]
+opt-level = 3
+
+[profile.dev.package.esp-backtrace]
+opt-level = 3
+
+[profile.dev.package.esp-println]
+opt-level = 3
+
+[profile.dev.package.p384]
+opt-level = 3
+debug = false
+
+[profile.dev.package.mbedtls-rs]
+opt-level = 3
+
+
+[patch.crates-io]
+esp-hal = { git = "https://github.com/esp-rs/esp-hal.git", rev = "91c776f5c95ac7c3027d12569e2cfdebacfefc73"  }
+edge-nal = { git = "https://github.com/sysgrok/edge-net.git" }

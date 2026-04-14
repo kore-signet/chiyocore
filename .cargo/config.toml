@@ -1,0 +1,20 @@
+[target.xtensa-esp32s3-none-elf]
+runner = "espflash flash --monitor --chip esp32s3 --partition-table partitions.csv --log-format defmt"
+
+[env]
+CC = "xtensa-esp32s3-elf-cc"
+AR = "xtensa-esp32s3-elf-ar"
+CFLAGS = "-mlongcalls"
+ESP_HAL_CONFIG_PSRAM_MODE = "octal"
+# ESP_HAL_CONFIG_PLACE_SPI_MASTER_DRIVER_IN_RAM = "true"
+# ESP_ALLOC_CONFIG_HEAP_ALGORITHM = "TLSF"
+
+[build]
+rustflags = [
+  "-C", "link-arg=-nostartfiles",
+]
+
+target = "xtensa-esp32s3-none-elf"
+
+[unstable]
+build-std = ["alloc", "core"]
