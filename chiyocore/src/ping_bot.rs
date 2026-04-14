@@ -164,7 +164,7 @@ impl SimpleMeshLayer for PingBot {
 }
 
 impl BuildChiyocoreLayer for PingBot {
-    type Input = PingBotConfig;
+    type Input = (&'static str, PingBotConfig);
     type Output = Arc<EspMutex<PingBot>>;
 
     fn build<T: 'static>(
@@ -175,6 +175,8 @@ impl BuildChiyocoreLayer for PingBot {
         >,
         cfg: &Self::Input,
     ) -> impl Future<Output = Self::Output> {
+        let (_, cfg) = cfg;
+        
         core::future::ready(Arc::new(EspMutex::new(PingBot {
             rtc: Arc::clone(chiyocore.rtc()),
             name: cfg.name.to_smolstr(),

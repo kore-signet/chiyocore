@@ -20,7 +20,7 @@ pub struct CompanionConfig {
 }
 
 impl BuildChiyocoreLayer for Companion {
-    type Input = CompanionConfig;
+    type Input = (&'static str, CompanionConfig);
     type Output = Arc<EspMutex<Companion>>;
 
     async fn build<T: 'static>(
@@ -29,6 +29,8 @@ impl BuildChiyocoreLayer for Companion {
         mesh: &alloc::sync::Arc<EspRwLock<SimpleMesh>>,
         config: &Self::Input,
     ) -> Self::Output {
+        let (_, config) = config;
+        
         add_channels(&mut *chiyocore.mesh_storage().channels.write().await).await;
 
         let (tcp_tx, tcp_rx) = thingbuf::mpsc::channel(16);
