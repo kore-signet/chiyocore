@@ -39,11 +39,9 @@ impl BuildChiyocoreLayer for Companion {
 
         let companion = Arc::new(EspMutex::new(
             Companion::new(
-                slot,
                 chiyocore.rtc(),
                 chiyocore.mesh_storage().clone(),
                 chiyocore.config_db(),
-                chiyocore.main_fs(),
                 chiyocore.log_fs(),
                 mesh,
                 ChannelCompanionSink::new(tcp_tx),

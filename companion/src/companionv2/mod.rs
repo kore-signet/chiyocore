@@ -1,6 +1,6 @@
-use alloc::{ffi::CString, sync::Arc};
+use alloc::{borrow::ToOwned, ffi::CString, string::String, sync::Arc};
 use chiyo_hal::{EspMutex, EspRwLock, esp_hal};
-use chiyocore::{PacketStatus, meshcore};
+use chiyocore::{CompanionError, PacketStatus, meshcore};
 use defmt::{Debug2Format, error, info};
 use esp_hal::rtc_cntl::Rtc;
 use litemap::LiteMap;
@@ -31,13 +31,8 @@ use chiyocore::{
 mod build;
 pub mod companion_proto_handler;
 
-#[derive(Serialize, Deserialize, Default)]
-pub struct CompanionConfig {
-    pub name: SmolStr,
-}
-
 pub struct Companion {
-    companion_config: PersistedObject<CompanionConfig, FS_SIZE>,
+    name: String,
     global_config: PersistedObject<LiteMap<SmolStr, SmolStr>, FS_SIZE>,
     identity: LocalIdentity,
     storage: MeshStorage,
@@ -52,35 +47,17 @@ pub struct Companion {
 impl Companion {
     #[allow(clippy::too_many_arguments)]
     pub async fn new(
-        pfx: &str,
         rtc: &Arc<Rtc<'static>>,
         shared_storage: MeshStorage,
         global_cfg_db: &SimpleFileDb<FS_SIZE>,
-        main_fs: &Arc<EspMutex<ActiveFilesystem<FS_SIZE>>>,
         msg_log: &Arc<EspMutex<MessageLog>>,
         mesh: &Arc<EspRwLock<SimpleMesh>>,
         companion_sink: ChannelCompanionSink,
     ) -> CompanionResult<Companion> {
-        let pfx = alloc::format!("/companion/{pfx}/");
-        let pfx = CString::new(pfx).unwrap();
+        let mesh_lock = mesh.read().await;
+        let name = core::str::from_utf8(mesh_lock.advert_data.get().name.as_ref().unwrap()).map_err(|_| CompanionError::DecodeFailure(meshcore::DecodeError::Utf8))?;
 
-        let cfg_db = SimpleFileDb::new(
-            Arc::clone(main_fs),
-            littlefs2::path::Path::from_cstr(&pfx).unwrap(),
-        )
-        .await;
         let identity = mesh.read().await.identity.clone();
-        let cfg = cfg_db
-            .get_persistable::<CompanionConfig>(c"cfg", || CompanionConfig {
-                name: const_hex::const_encode::<6, false>(arrayref::array_ref![
-                    identity.pubkey(),
-                    0,
-                    6
-                ])
-                .as_str()
-                .into(),
-            })
-            .await?;
 
         let global_cfg = global_cfg_db
             .get_persistable(c"general", LiteMap::new)
@@ -89,7 +66,6 @@ impl Companion {
         // let msg_log = MessageLog::new(log_fs);
 
         Ok(Companion {
-            companion_config: cfg,
             global_config: global_cfg,
             companion_sink,
             identity,
@@ -99,6 +75,7 @@ impl Companion {
             message_log: Arc::clone(msg_log),
             signature_in_progress: None,
             login_in_progress: None,
+            name: name.to_owned()
         })
     }
 }

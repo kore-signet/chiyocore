@@ -23,7 +23,7 @@ use esp_hal::{
 };
 use esp_storage::FlashStorage;
 use esp_sync::NonReentrantMutex;
-use meshcore::identity::LocalIdentity;
+use meshcore::{identity::LocalIdentity, payloads::AdvertisementExtraData};
 use ouroboros::self_referencing;
 use thingbuf::mpsc::StaticReceiver;
 
@@ -35,7 +35,7 @@ use crate::{
         MeshLayerGet, SimpleMesh,
         storage::{MeshStorage, message_log::MessageLog},
     },
-    storage::{ActiveFilesystem, FsPartition, SimpleFileDb},
+    storage::{ActiveFilesystem, FS_SIZE, FsPartition, PersistedObject, SimpleFileDb},
 };
 
 pub trait BuildChiyocoreLayer {
@@ -62,11 +62,11 @@ pub trait BuildChiyocoreSet {
     ) -> impl Future<Output = Self::Output>;
 }
 
-pub struct ChiyocoreNode<L: BuildChiyocoreLayer>(LocalIdentity, PhantomData<L>);
+pub struct ChiyocoreNode<L: BuildChiyocoreLayer>(LocalIdentity, PersistedObject<AdvertisementExtraData<'static>, { FS_SIZE}>, PhantomData<L>);
 
 impl<L: BuildChiyocoreLayer> ChiyocoreNode<L> {
-    pub fn new(identity: LocalIdentity) -> Self {
-        ChiyocoreNode(identity, PhantomData)
+    pub fn new(identity: LocalIdentity, advert: PersistedObject<AdvertisementExtraData<'static>, { FS_SIZE}> ) -> Self {
+        ChiyocoreNode(identity, advert, PhantomData)
     }
 }
 
@@ -78,13 +78,14 @@ impl<L: BuildChiyocoreLayer> BuildChiyocoreSet for ChiyocoreNode<L> {
         self,
         spawner: &Spawner,
         chiyocore: &Chiyocore<T, ChiyocoreSetupData>,
-        config: &L::Input,
+        config: &Self::Input
     ) -> Self::Output {
         let mesh = Arc::new(RwLock::new(SimpleMesh::new(
             self.0,
             chiyocore.mesh_storage().clone(),
             chiyocore.lora_channel.clone(),
             chiyocore.rtc(),
+            self.1
         )));
         // spawner.spawn(heap_log(Arc::clone(&mesh)).unwrap());
         let layers = L::build(spawner, chiyocore, &mesh, config).await;
@@ -379,7 +380,7 @@ macro_rules! impl_chiyocore_layer_tuple {
         // pub struct ChiyocoreNode<L: BuildChiyocoreLayer>(LocalIdentity, PhantomData<L>);
 
         impl<$($var),*> BuildChiyocoreSet for ($(ChiyocoreNode<$var>),*) where $($var: BuildChiyocoreLayer),* {
-            type Input = ($(<$var as BuildChiyocoreLayer>::Input),*);
+            type Input = ($(<ChiyocoreNode<$var> as BuildChiyocoreSet>::Input),*);
             type Output = ($((Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>, $var::Output)),*);
 
             async fn build_handler<T: 'static>(

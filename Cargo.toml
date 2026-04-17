@@ -1,5 +1,6 @@
 [workspace]
 members = ["chiyocore", "companion", "chiyo-hal"]
+exclude = ["test-firmware"]
 resolver = "3"
 
 [workspace.lints.clippy]

@@ -1,4 +1,4 @@
-use alloc::{borrow::Cow, string::String};
+use alloc::{borrow::{Cow, ToOwned}, string::String};
 use chiyo_hal::esp_hal::rng::Trng;
 use ed25519_compact::Noise;
 use meshcore::{
@@ -18,7 +18,7 @@ use crate::{
             self, ChannelInfo, CompanionProtoResult, DeviceInfo, GetMessageRes, MsgSent, SelfInfo,
         },
     },
-    companionv2::{Companion, CompanionConfig},
+    companionv2::Companion,
 };
 use chiyocore::{
     lora::LORA_FREQUENCY_IN_HZ,
@@ -53,7 +53,7 @@ impl CompanionHandler for Companion {
             radio_bandwidth: 62_500,
             radio_sf: 7,
             radio_cr: 5,
-            device_name: &self.companion_config.name,
+            device_name: &self.name,
         })
     }
 
@@ -118,7 +118,7 @@ impl CompanionHandler for Companion {
             return Err(responses::Err { code: None });
         };
 
-        let msg = heapless::format!(152; "{}: {}", self.companion_config.name, txt).unwrap();
+        let msg = heapless::format!(152; "{}: {}", self.name, txt).unwrap();
 
         let text = TextMessageData::plaintext(timestamp, msg.as_bytes());
         let timeout = self
@@ -182,7 +182,7 @@ impl CompanionHandler for Companion {
             longitude: None,
             feature_1: None,
             feature_2: None,
-            name: Some(self.companion_config.name.as_bytes().into()),
+            name: Some(self.name.as_bytes().into()),
         };
 
         let random_bytes = rand::Rng::random(&mut Trng::try_new().unwrap());
@@ -204,9 +204,8 @@ impl CompanionHandler for Companion {
     }
 
     async fn set_advert_name(&mut self, name: &str) -> CompanionProtoResult<responses::Ok> {
-        self.companion_config
-            .set(CompanionConfig { name: name.into() })
-            .await?;
+        self.name = name.to_owned();
+        self.mesh.write().await.advert_data.with_mut(|v| v.name = Some(Cow::Owned(name.as_bytes().to_owned()))).await;
         Ok(responses::Ok { code: None })
     }
 

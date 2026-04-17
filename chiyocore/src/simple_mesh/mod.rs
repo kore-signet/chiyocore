@@ -2,11 +2,11 @@ use core::time::Duration;
 
 use crate::{
     PacketStatus,
-    simple_mesh::storage::packet_log::{HashLog, SavedMessage},
+    simple_mesh::storage::packet_log::{HashLog, SavedMessage}, storage::{FS_SIZE, PersistedObject},
 };
 use alloc::{borrow::Cow, string::String, sync::Arc, vec::Vec};
 use arrayref::array_ref;
-use chiyo_hal::{embassy_futures, embassy_sync, embassy_time, esp_hal, esp_sync};
+use chiyo_hal::{embassy_futures, embassy_sync, embassy_time, esp_hal::{self, rng::Trng}, esp_sync};
 use defmt::{Debug2Format, error, info, trace};
 use embassy_executor::SendSpawner;
 use embassy_sync::rwlock::RwLock;
@@ -19,10 +19,10 @@ use meshcore::{
     identity::{ForeignIdentity, LocalIdentity},
     io::ByteVecImpl,
     payloads::{
-        Ack, Advert, AnonymousRequest, ControlPayload, EncryptedMessageWithDst, GroupText,
-        RequestPayload, ResponsePayload, ReturnedPath, TextMessageData, TracePacket,
+        Ack, Advert, AdvertisementExtraData, AnonymousRequest, ControlPayload, EncryptedMessageWithDst, GroupText, RequestPayload, ResponsePayload, ReturnedPath, TextMessageData, TracePacket
     },
 };
+use rand::Rng;
 
 use crate::{
     BumpaloVec, CompanionError, CompanionResult, MeshcoreHandler,
@@ -59,6 +59,7 @@ pub struct SimpleMesh {
     pub rtc: Arc<Rtc<'static>>,
     ack_table: Arc<WaitMap<[u8; 4], bool>>,
     key_cache: SharedKeyCache,
+    pub advert_data: PersistedObject<AdvertisementExtraData<'static>, { FS_SIZE }>
 }
 
 impl SimpleMesh {
@@ -67,6 +68,7 @@ impl SimpleMesh {
         storage: MeshStorage,
         lora_tx: LoraTaskChannel,
         rtc: &Arc<Rtc<'static>>,
+        advert_data: PersistedObject<AdvertisementExtraData<'static>, { FS_SIZE }>
     ) -> SimpleMesh {
         SimpleMesh {
             key_cache: SharedKeyCache::new(&identity),
@@ -79,6 +81,7 @@ impl SimpleMesh {
             rtc: Arc::clone(rtc),
             storage,
             ack_table: Arc::new(WaitMap::new()), // ack_table: LiteMap::new_vec()
+            advert_data
         }
     }
 }
@@ -361,6 +364,11 @@ impl SimpleMesh {
         self.send_packet(&ack_packet, false, Some(rx_time)).await?;
 
         Ok(())
+    }
+
+    pub async fn make_advert(&self) -> Advert<'static> {
+        let random_bytes = Rng::random(&mut Trng::try_new().unwrap());
+        self.identity.make_advert((self.rtc.current_time_us() / 1_000_000) as u32, self.advert_data.clone(), random_bytes)
     }
 }
 

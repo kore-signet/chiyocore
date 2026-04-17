@@ -1,6 +1,6 @@
 use core::{ffi::CStr, ops::Deref};
 
-use alloc::{sync::Arc, vec::Vec};
+use alloc::{borrow::ToOwned, ffi::CString, sync::Arc, vec::Vec};
 use chiyo_hal::{embedded_storage, esp_storage, esp_sync};
 use embedded_storage::nor_flash::ReadNorFlash;
 use esp_storage::FlashStorage;
@@ -306,9 +306,9 @@ impl<const SIZE: usize> SimpleFileDb<SIZE> {
             .map_err(FirmwareError::from)
     }
 
-    pub async fn get_persistable<T: Serialize + DeserializeOwned + Default>(
+    pub async fn get_persistable<T: Serialize + DeserializeOwned>(
         &self,
-        key: &'static CStr,
+        key: &CStr,
         def: impl FnOnce() -> T,
     ) -> FirmwareResult<PersistedObject<T, SIZE>> {
         let data = match self.get(key).await? {
@@ -321,7 +321,7 @@ impl<const SIZE: usize> SimpleFileDb<SIZE> {
         };
 
         Ok(PersistedObject {
-            key,
+            key: key.to_owned(),
             data,
             db: self.clone(),
         })
@@ -329,13 +329,13 @@ impl<const SIZE: usize> SimpleFileDb<SIZE> {
 }
 
 /// An object backed by an underlying SimpleFileDb (useful for, e.g, keeping a configuration value both in-memory and on-flash)
-pub struct PersistedObject<T: Serialize + DeserializeOwned + Default, const SIZE: usize> {
-    pub key: &'static CStr,
+pub struct PersistedObject<T: Serialize + DeserializeOwned, const SIZE: usize> {
+    pub key: CString,
     data: T,
     db: SimpleFileDb<SIZE>,
 }
 
-impl<T: Serialize + DeserializeOwned + Default, const SIZE: usize> Deref
+impl<T: Serialize + DeserializeOwned, const SIZE: usize> Deref
     for PersistedObject<T, SIZE>
 {
     type Target = T;
@@ -345,10 +345,14 @@ impl<T: Serialize + DeserializeOwned + Default, const SIZE: usize> Deref
     }
 }
 
-impl<T: Serialize + DeserializeOwned + Default, const SIZE: usize> PersistedObject<T, SIZE> {
+impl<T: Serialize + DeserializeOwned, const SIZE: usize> PersistedObject<T, SIZE> {
+    pub fn get(&self) -> &T {
+        &self.data
+    }
+
     /// Sync a new value to flash.
     pub async fn set(&mut self, new_val: T) -> FirmwareResult<()> {
-        self.db.insert(self.key, &new_val).await?;
+        self.db.insert(&self.key, &new_val).await?;
         self.data = new_val;
         Ok(())
     }
@@ -356,7 +360,7 @@ impl<T: Serialize + DeserializeOwned + Default, const SIZE: usize> PersistedObje
     /// Mutate the stored data, and sync it to flash.
     pub async fn with_mut(&mut self, f: impl FnOnce(&mut T)) -> FirmwareResult<()> {
         f(&mut self.data);
-        self.db.insert(self.key, &self.data).await?;
+        self.db.insert(&self.key, &self.data).await?;
         Ok(())
     }
 }

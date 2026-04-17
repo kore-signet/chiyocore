@@ -1,0 +1,15 @@
+[ram]
+reclaimed = "73744"
+main = "1024 * 32"
+psram_mode = "octal"
+
+[pins]
+sclk = "GPIO7"
+mosi = "GPIO9"
+miso = "GPIO8"
+cs = "GPIO41"
+reset = "GPIO42"
+busy = "GPIO40"
+dio1 = "GPIO39"
+rx_en = "GPIO38"
+spi = "SPI2"
