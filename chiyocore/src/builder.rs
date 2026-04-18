@@ -62,10 +62,17 @@ pub trait BuildChiyocoreSet {
     ) -> impl Future<Output = Self::Output>;
 }
 
-pub struct ChiyocoreNode<L: BuildChiyocoreLayer>(LocalIdentity, PersistedObject<AdvertisementExtraData<'static>, { FS_SIZE}>, PhantomData<L>);
+pub struct ChiyocoreNode<L: BuildChiyocoreLayer>(
+    LocalIdentity,
+    PersistedObject<AdvertisementExtraData<'static>, { FS_SIZE }>,
+    PhantomData<L>,
+);
 
 impl<L: BuildChiyocoreLayer> ChiyocoreNode<L> {
-    pub fn new(identity: LocalIdentity, advert: PersistedObject<AdvertisementExtraData<'static>, { FS_SIZE}> ) -> Self {
+    pub fn new(
+        identity: LocalIdentity,
+        advert: PersistedObject<AdvertisementExtraData<'static>, { FS_SIZE }>,
+    ) -> Self {
         ChiyocoreNode(identity, advert, PhantomData)
     }
 }
@@ -78,14 +85,14 @@ impl<L: BuildChiyocoreLayer> BuildChiyocoreSet for ChiyocoreNode<L> {
         self,
         spawner: &Spawner,
         chiyocore: &Chiyocore<T, ChiyocoreSetupData>,
-        config: &Self::Input
+        config: &Self::Input,
     ) -> Self::Output {
         let mesh = Arc::new(RwLock::new(SimpleMesh::new(
             self.0,
             chiyocore.mesh_storage().clone(),
             chiyocore.lora_channel.clone(),
             chiyocore.rtc(),
-            self.1
+            self.1,
         )));
         // spawner.spawn(heap_log(Arc::clone(&mesh)).unwrap());
         let layers = L::build(spawner, chiyocore, &mesh, config).await;

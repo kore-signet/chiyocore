@@ -335,9 +335,7 @@ pub struct PersistedObject<T: Serialize + DeserializeOwned, const SIZE: usize> {
     db: SimpleFileDb<SIZE>,
 }
 
-impl<T: Serialize + DeserializeOwned, const SIZE: usize> Deref
-    for PersistedObject<T, SIZE>
-{
+impl<T: Serialize + DeserializeOwned, const SIZE: usize> Deref for PersistedObject<T, SIZE> {
     type Target = T;
 
     fn deref(&self) -> &Self::Target {

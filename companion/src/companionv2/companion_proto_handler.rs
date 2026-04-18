@@ -1,4 +1,7 @@
-use alloc::{borrow::{Cow, ToOwned}, string::String};
+use alloc::{
+    borrow::{Cow, ToOwned},
+    string::String,
+};
 use chiyo_hal::esp_hal::rng::Trng;
 use ed25519_compact::Noise;
 use meshcore::{
@@ -205,7 +208,12 @@ impl CompanionHandler for Companion {
 
     async fn set_advert_name(&mut self, name: &str) -> CompanionProtoResult<responses::Ok> {
         self.name = name.to_owned();
-        self.mesh.write().await.advert_data.with_mut(|v| v.name = Some(Cow::Owned(name.as_bytes().to_owned()))).await;
+        self.mesh
+            .write()
+            .await
+            .advert_data
+            .with_mut(|v| v.name = Some(Cow::Owned(name.as_bytes().to_owned())))
+            .await;
         Ok(responses::Ok { code: None })
     }
 

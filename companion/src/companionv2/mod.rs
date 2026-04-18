@@ -55,7 +55,8 @@ impl Companion {
         companion_sink: ChannelCompanionSink,
     ) -> CompanionResult<Companion> {
         let mesh_lock = mesh.read().await;
-        let name = core::str::from_utf8(mesh_lock.advert_data.get().name.as_ref().unwrap()).map_err(|_| CompanionError::DecodeFailure(meshcore::DecodeError::Utf8))?;
+        let name = core::str::from_utf8(mesh_lock.advert_data.get().name.as_ref().unwrap())
+            .map_err(|_| CompanionError::DecodeFailure(meshcore::DecodeError::Utf8))?;
 
         let identity = mesh.read().await.identity.clone();
 
@@ -75,7 +76,7 @@ impl Companion {
             message_log: Arc::clone(msg_log),
             signature_in_progress: None,
             login_in_progress: None,
-            name: name.to_owned()
+            name: name.to_owned(),
         })
     }
 }

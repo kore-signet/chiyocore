@@ -7,6 +7,8 @@ default_channels = ["#test", "#emitestcorner"]
 
 [stackup.chiyo0]
 id = "chiyo0"
+name = "cafe / chiyobot 🌃☕"
+role = "ChatNode"
 
 [stackup.chiyo0.layers.companion-0]
 type = "chiyocore_companion::companionv2::Companion"

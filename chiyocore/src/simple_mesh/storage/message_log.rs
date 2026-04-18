@@ -7,7 +7,9 @@ use sequential_storage::{
 };
 
 use crate::{
-    partition_table, simple_mesh::storage::packet_log::{HashLog, HashableMessage, SavedMessage}, storage::FsPartition,
+    partition_table,
+    simple_mesh::storage::packet_log::{HashLog, HashableMessage, SavedMessage},
+    storage::FsPartition,
 };
 
 pub const MESSAGE_LOG_SIZE: usize = partition_table::LOGS.size as usize;
@@ -20,7 +22,7 @@ pub type MessageLogStorage = QueueStorage<
 pub struct MessageLog {
     storage: MessageLogStorage,
     scratch: Vec<u8>,
-    latest: HashLog<16> // keep a rolling window to make sure messages aren't stored twice
+    latest: HashLog<16>, // keep a rolling window to make sure messages aren't stored twice
 }
 
 impl MessageLog {
@@ -33,7 +35,7 @@ impl MessageLog {
         MessageLog {
             scratch: vec![0u8; 328],
             storage,
-            latest: HashLog::new()
+            latest: HashLog::new(),
         }
     }
 

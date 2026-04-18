@@ -11,7 +11,7 @@ use crate::{CompanionResult, builder::BuildChiyocoreLayer, simple_mesh::SimpleMe
 #[derive(Serialize, Deserialize)]
 pub struct PingBotConfig {
     pub name: Cow<'static, str>,
-    pub channels: Cow<'static, [SmolStr]>
+    pub channels: Cow<'static, [SmolStr]>,
 }
 
 pub struct PingBot {
@@ -176,7 +176,7 @@ impl BuildChiyocoreLayer for PingBot {
         cfg: &Self::Input,
     ) -> impl Future<Output = Self::Output> {
         let (_, cfg) = cfg;
-        
+
         core::future::ready(Arc::new(EspMutex::new(PingBot {
             rtc: Arc::clone(chiyocore.rtc()),
             name: cfg.name.to_smolstr(),

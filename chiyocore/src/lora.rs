@@ -1,6 +1,7 @@
 use chiyo_hal::{
     EspMutex, embassy_embedded_hal, embassy_executor, embassy_futures, embassy_sync, embassy_time,
-    esp_hal, esp_sync,
+    esp_hal::{self, gpio::OutputConfig},
+    esp_sync,
 };
 use defmt::{Debug2Format, error, info, trace};
 
@@ -60,6 +61,7 @@ pub trait LoraPins {
     type Busy: InputPin + 'static;
     type Dio1: InputPin + 'static;
     type RxEn: OutputPin + 'static;
+    type BoardEn: OutputPin + 'static;
     type Spi: esp_hal::spi::master::Instance + 'static;
 
     fn into_bundle(
@@ -73,11 +75,13 @@ pub trait LoraPins {
         Self::Busy,
         Self::Dio1,
         Self::RxEn,
+        Self::BoardEn,
         Self::Spi,
     >;
 }
 
 /// Bundle of pins required to drive an SPI LoRa radio, alongside an SPI driver
+#[allow(non_camel_case_types)]
 pub struct LoraPinBundle<
     SCLK: OutputPin + 'static,
     MOSI: OutputPin + 'static,
@@ -87,6 +91,7 @@ pub struct LoraPinBundle<
     BUSY: InputPin + 'static,
     DIO1: InputPin + 'static,
     RXEN: OutputPin + 'static,
+    BOARD_EN: OutputPin + 'static,
     SPI: esp_hal::spi::master::Instance + 'static,
 > {
     pub sclk: SCLK,
@@ -97,6 +102,7 @@ pub struct LoraPinBundle<
     pub busy: BUSY,
     pub dio1: DIO1,
     pub rx_en: Option<RXEN>,
+    pub board_en: Option<BOARD_EN>,
     pub spi: SPI,
 }
 
@@ -109,8 +115,9 @@ impl<
     BUSY: InputPin + 'static,
     DIO1: InputPin + 'static,
     RXEN: OutputPin + 'static,
+    BOARD_EN: OutputPin + 'static,
     SPI: esp_hal::spi::master::Instance + 'static,
-> LoraPins for LoraPinBundle<SCLK, MOSI, MISO, CS, RESET, BUSY, DIO1, RXEN, SPI>
+> LoraPins for LoraPinBundle<SCLK, MOSI, MISO, CS, RESET, BUSY, DIO1, RXEN, BOARD_EN, SPI>
 {
     type Sclk = SCLK;
     type Mosi = MOSI;
@@ -120,6 +127,7 @@ impl<
     type Busy = BUSY;
     type Dio1 = DIO1;
     type RxEn = RXEN;
+    type BoardEn = BOARD_EN;
     type Spi = SPI;
 
     fn into_bundle(
@@ -133,17 +141,32 @@ impl<
         Self::Busy,
         Self::Dio1,
         Self::RxEn,
+        Self::BoardEn,
         Self::Spi,
     > {
         self
     }
 }
 
+// pub
+
 /// Create and initialize a LoRa radio from a set of pins.
 pub async fn lora_init<T: LoraPins>(
     pins: T,
 ) -> lora_phy::LoRa<Sx1262Radio<'static>, embassy_time::Delay> {
     let pins = pins.into_bundle();
+
+    let _board_en = if let Some(board_en) = pins.board_en {
+        Some(esp_hal::gpio::Output::new(
+            board_en,
+            esp_hal::gpio::Level::High,
+            OutputConfig::default(),
+        ))
+    } else {
+        None
+    };
+
+    // let board_en =
 
     let lora_cs = esp_hal::gpio::Output::new(
         pins.cs,
@@ -158,11 +181,13 @@ pub async fn lora_init<T: LoraPins>(
     );
     let busy = esp_hal::gpio::Input::new(pins.busy, esp_hal::gpio::InputConfig::default());
     let dio1 = esp_hal::gpio::Input::new(pins.dio1, esp_hal::gpio::InputConfig::default());
-    let rx_en = pins.rx_en.map(|pin| esp_hal::gpio::Output::new(
-        pin,
-        esp_hal::gpio::Level::Low,
-        esp_hal::gpio::OutputConfig::default(),
-    ));
+    let rx_en = pins.rx_en.map(|pin| {
+        esp_hal::gpio::Output::new(
+            pin,
+            esp_hal::gpio::Level::Low,
+            esp_hal::gpio::OutputConfig::default(),
+        )
+    });
 
     let spi = esp_hal::spi::master::Spi::new(
         pins.spi,
@@ -192,8 +217,8 @@ pub async fn lora_init<T: LoraPins>(
     };
 
     // Create the radio instance
-    let iv = lora_phy::iv::GenericSx126xInterfaceVariant::new(reset, dio1, busy, rx_en, None)
-        .unwrap();
+    let iv =
+        lora_phy::iv::GenericSx126xInterfaceVariant::new(reset, dio1, busy, rx_en, None).unwrap();
 
     // log::info!("{}",lora.get_rssi().await.unwrap());
 
@@ -467,11 +492,7 @@ impl LoraTaskChannel {
         payload: &P::Representation<'_>,
         path: Path<'_>,
     ) -> Duration {
-        info!(
-            "tx | {} | direct (path: {})",
-            P::PAYLOAD_TYPE,
-            path
-        );
+        info!("tx | {} | direct (path: {})", P::PAYLOAD_TYPE, path);
 
         let mut scratch = [0u8; 256];
 
@@ -499,11 +520,7 @@ impl LoraTaskChannel {
         payload: &P::Representation<'_>,
         path: Path<'_>,
     ) -> Duration {
-        info!(
-            "tx | {} | flood (path: {})",
-            P::PAYLOAD_TYPE,
-            path
-        );
+        info!("tx | {} | flood (path: {})", P::PAYLOAD_TYPE, path);
         let mut scratch = [0u8; 256]; // todo: is this better than alloc'ing :?
         let payload_buf = P::encode(payload, &mut scratch).unwrap();
         let packet = Packet {

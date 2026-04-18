@@ -30,7 +30,7 @@ impl BuildChiyocoreLayer for Companion {
         config: &Self::Input,
     ) -> Self::Output {
         let (_, config) = config;
-        
+
         add_channels(&mut *chiyocore.mesh_storage().channels.write().await).await;
 
         let (tcp_tx, tcp_rx) = thingbuf::mpsc::channel(16);
