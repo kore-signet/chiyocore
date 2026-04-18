@@ -60,8 +60,3 @@ debug = false
 
 [profile.dev.package.mbedtls-rs]
 opt-level = 3
-
-
-[patch.crates-io]
-esp-hal = { git = "https://github.com/esp-rs/esp-hal.git", rev = "91c776f5c95ac7c3027d12569e2cfdebacfefc73"  }
-edge-nal = { git = "https://github.com/sysgrok/edge-net.git" }

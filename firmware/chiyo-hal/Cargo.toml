@@ -1,0 +1,37 @@
+[package]
+name = "chiyo-hal"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+embassy-embedded-hal = { version = "0.6.0" }
+embassy-executor = { version = "0.10", features = ["defmt"] }
+embassy-futures = { version = "0.1.2" }
+embassy-net = { version = "0.9.0", features = [
+  "dhcpv4",
+  "udp",
+  "medium-ethernet",
+  "dns",
+  "tcp",
+  "defmt"
+] }
+embassy-sync = { version = "0.8.0", features = ["defmt"] }
+embassy-time = { version = "0.5.1", features = ["defmt"] }
+embedded-io-async = { version = "0.7.0" }
+esp-alloc = { version = "0.10.0", features = ["esp32s3", "nightly"] }
+esp-hal = { version = "1.1.0-rc.0", features = ["esp32s3", "defmt", "unstable"] }
+esp-println = { version = "0.17.0",  features = ["esp32s3", "defmt-espflash"] }
+esp-radio = { version = "0.18.0",  features = ["esp32s3", "wifi", "esp-alloc", "unstable"] }
+esp-storage = { version = "0.9.0",  features = [
+  "bytewise-read",
+  "esp-hal",
+  "esp-sync",
+  "esp32s3",
+] }
+esp-backtrace = { version = "0.19.0",  features = ["defmt", "esp32s3", "panic-handler"] }
+esp-sync = { version = "0.2.1",  features = ["esp32s3"] }
+esp-rtos = { version = "0.3.0",  features = ["esp32s3", "esp-alloc", "esp-radio", "defmt", "alloc", "embassy"] }
+embedded-storage = "0.3.1"
+
+[lints]
+workspace = true

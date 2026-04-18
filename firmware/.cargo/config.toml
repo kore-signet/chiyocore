@@ -5,7 +5,7 @@ runner = "espflash flash --monitor --chip esp32s3 --partition-table partitions.c
 CC = "xtensa-esp32s3-elf-cc"
 AR = "xtensa-esp32s3-elf-ar"
 CFLAGS = "-mlongcalls"
-ESP_HAL_CONFIG_PSRAM_MODE = "octal"
+# ESP_HAL_CONFIG_PSRAM_MODE = "octal"
 # ESP_HAL_CONFIG_PLACE_SPI_MASTER_DRIVER_IN_RAM = "true"
 # ESP_ALLOC_CONFIG_HEAP_ALGORITHM = "TLSF"
 

@@ -21,7 +21,6 @@ target/
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
 
-test-firmware/
 
 # Ignore .DS_Store file in mac
 **/.DS_Store

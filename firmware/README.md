@@ -15,7 +15,7 @@ this is extremely experimental and not guaranteed to work or not fry your radio/
 
 ## how to get it running
 
-generate your firmware using [chiyocore-builder](builder/)!
+generate your firmware using [chiyocore-builder](https://github.com/kore-signet/chiyocore-builder)!
 
 if you setup a companion, connect to it with meshcore-cli:
 `meshcore-cli -t <board-ip-address> -p <companion-port>`
@@ -26,15 +26,15 @@ if you setup a companion, connect to it with meshcore-cli:
 ## development notes!
 
 ### project architecture
-the main meshcore logic is written in [chiyocore](firmware/chiyocore/). the goals are that this should provide a framework that handles:
+the main meshcore logic is written in [chiyocore](chiyocore/). the goals are that this should provide a framework that handles:
 - keeping track of contacts, channels and received packets
 - most packet sending logic
 - most packet decoding logic
 so that layers built on top of it can remain as high-level as possible.
 
-said layers are configured by the [builder](builder/) tool, which takes a board configuration plus a firmware setup config and generates a temporary binary crate linking all the configured handler layers together with the specified board pinout. 
+said layers are configured by the [builder](https://github.com/kore-signet/chiyocore-builder) tool, which takes a board configuration plus a firmware setup config and generates a temporary binary crate linking all the configured handler layers together with the specified board pinout. 
 
-example implementations of handler layers are the [companion](firmware/companion/) implementation, as well as the example [TTC bus arrival time bot](https://codeberg.org/emisignet/chiyocore-ttc).
+example implementations of handler layers are the [companion](companion/) implementation, as well as the example [TTC bus arrival time bot](https://codeberg.org/emisignet/chiyocore-ttc).
 
 ### todos & random thoughts
 - more radio support!!
