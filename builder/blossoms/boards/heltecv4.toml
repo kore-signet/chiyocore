@@ -1,0 +1,14 @@
+[ram]
+reclaimed = "73744"
+main = "1024 * 32"
+psram = true
+
+[pins]
+sclk = "GPIO9"
+mosi = "GPIO10"
+miso = "GPIO11"
+cs = "GPIO8"
+reset = "GPIO12"
+busy = "GPIO13"
+dio1 = "GPIO14"
+spi = "SPI2"
