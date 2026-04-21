@@ -1,7 +1,7 @@
 use core::time::Duration;
 
 use chiyo_hal::esp_hal;
-use meshcore::{Packet, SerDeser, timing::AirtimeEstConfig};
+use chiyo_hal::meshcore::{self, Packet, SerDeser, timing::AirtimeEstConfig};
 
 const DIRECT_TX_DELAY: Duration = Duration::from_millis(500);
 const FLOOD_TX_DELAY_FACTOR: f32 = 1.0;

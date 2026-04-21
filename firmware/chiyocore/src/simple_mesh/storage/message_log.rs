@@ -1,23 +1,21 @@
 use alloc::vec;
 use alloc::vec::Vec;
-use chiyo_hal::embassy_embedded_hal;
+use chiyo_hal::{embassy_embedded_hal, storage::FsPartition};
 use sequential_storage::{
-    cache::PagePointerCache,
+    cache::HeapPagePointerCache,
     queue::{QueueConfig, QueueStorage},
 };
 
 use crate::{
     partition_table,
-    simple_mesh::storage::packet_log::{HashLog, HashableMessage, SavedMessage},
-    storage::FsPartition,
+    simple_mesh::storage::packet_log::{HashLog, SavedMessage},
+    // storage::FsPartition,
 };
 
 pub const MESSAGE_LOG_SIZE: usize = partition_table::LOGS.size as usize;
 
-pub type MessageLogStorage = QueueStorage<
-    embassy_embedded_hal::adapter::BlockingAsync<FsPartition<MESSAGE_LOG_SIZE>>,
-    PagePointerCache<8>,
->;
+pub type MessageLogStorage =
+    QueueStorage<embassy_embedded_hal::adapter::BlockingAsync<FsPartition>, HeapPagePointerCache>;
 
 pub struct MessageLog {
     storage: MessageLogStorage,
@@ -26,11 +24,12 @@ pub struct MessageLog {
 }
 
 impl MessageLog {
-    pub fn new(partition: FsPartition<MESSAGE_LOG_SIZE>) -> MessageLog {
+    pub fn new(partition: FsPartition) -> MessageLog {
+        let part_size = partition.size();
         let storage = sequential_storage::queue::QueueStorage::new(
             embassy_embedded_hal::adapter::BlockingAsync::new(partition),
-            QueueConfig::new(const { 0..(MESSAGE_LOG_SIZE - 4096) as u32 }),
-            PagePointerCache::new(),
+            QueueConfig::new(0..(part_size - 4096) as u32),
+            HeapPagePointerCache::new(8),
         );
         MessageLog {
             scratch: vec![0u8; 328],

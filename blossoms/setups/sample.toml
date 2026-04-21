@@ -5,6 +5,16 @@ stack_size = 32768
 config = { "wifi.pw" = "nya", "wifi.ssid" = "nya" }
 default_channels = ["#test", "#emitestcorner"]
 
+[stackup.chiyo1]
+id = "chiyo1"
+name = "cafe / chiyobserver 🌃☕"
+role = "ChatNode"
+
+[stackup.chiyo1.layers.companion-observer]
+type = "chiyocore_companion::companionv2::Companion"
+id = "chiyocompanion1"
+tcp_port = 3000
+
 [stackup.chiyo0]
 id = "chiyo0"
 name = "cafe / chiyobot 🌃☕"

@@ -3,23 +3,12 @@ use core::time::Duration;
 use crate::{
     PacketStatus,
     simple_mesh::storage::packet_log::{HashLog, SavedMessage},
-    storage::{FS_SIZE, PersistedObject},
 };
 use alloc::{borrow::Cow, string::String, sync::Arc, vec::Vec};
 use arrayref::array_ref;
-use chiyo_hal::{
-    embassy_futures, embassy_sync, embassy_time,
-    esp_hal::{self, rng::Trng},
-    esp_sync,
-};
-use defmt::{Debug2Format, error, info, trace};
-use embassy_executor::SendSpawner;
-use embassy_sync::rwlock::RwLock;
-use esp_hal::rtc_cntl::Rtc;
-use futures_util::FutureExt;
-use maitake_sync::{WaitCell, WaitMap};
-use meshcore::{
-    Packet, PacketHeader, PacketPayload, Path, PathHashMode, PayloadType, RouteType, SerDeser,
+use chiyo_hal::meshcore::{
+    self, Packet, PacketHeader, PacketPayload, Path, PathHashMode, PayloadType, RouteType,
+    SerDeser,
     crypto::{ChannelKeys, ContainsEncryptable, DecryptedView, Encryptable, VerifiablePayload},
     identity::{ForeignIdentity, LocalIdentity},
     io::ByteVecImpl,
@@ -29,6 +18,18 @@ use meshcore::{
         TextMessageData, TracePacket,
     },
 };
+use chiyo_hal::{
+    embassy_futures, embassy_sync, embassy_time,
+    esp_hal::{self, rng::Trng},
+    esp_sync,
+    storage::PersistedObject,
+};
+use defmt::{error, info, trace};
+use embassy_executor::SendSpawner;
+use embassy_sync::rwlock::RwLock;
+use esp_hal::rtc_cntl::Rtc;
+use futures_util::FutureExt;
+use maitake_sync::{WaitCell, WaitMap};
 use rand::Rng;
 
 use crate::{
@@ -66,7 +67,7 @@ pub struct SimpleMesh {
     pub rtc: Arc<Rtc<'static>>,
     ack_table: Arc<WaitMap<[u8; 4], bool>>,
     key_cache: SharedKeyCache,
-    pub advert_data: PersistedObject<AdvertisementExtraData<'static>, { FS_SIZE }>,
+    pub advert_data: PersistedObject<AdvertisementExtraData<'static>>,
 }
 
 impl SimpleMesh {
@@ -75,7 +76,7 @@ impl SimpleMesh {
         storage: MeshStorage,
         lora_tx: LoraTaskChannel,
         rtc: &Arc<Rtc<'static>>,
-        advert_data: PersistedObject<AdvertisementExtraData<'static>, { FS_SIZE }>,
+        advert_data: PersistedObject<AdvertisementExtraData<'static>>,
     ) -> SimpleMesh {
         SimpleMesh {
             key_cache: SharedKeyCache::new(&identity),

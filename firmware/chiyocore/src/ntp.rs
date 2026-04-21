@@ -75,7 +75,7 @@ pub async fn ntp_once(stack: embassy_net::Stack<'static>, rtc: &Rtc<'_>) {
         Timer::after(Duration::from_millis(1000)).await;
     }
 
-    const BUFF_SZ: usize = 4096;
+    const BUFF_SZ: usize = 1024;
 
     trace!("Prepare NTP lookup");
     let mut ip_addr = stack
@@ -87,10 +87,10 @@ pub async fn ntp_once(stack: embassy_net::Stack<'static>, rtc: &Rtc<'_>) {
 
     let s_addr = SocketAddr::from((addr, 123));
 
-    let mut rx_meta = [PacketMetadata::EMPTY; 16];
-    let mut rx_buffer = [0; BUFF_SZ];
-    let mut tx_meta = [PacketMetadata::EMPTY; 16];
-    let mut tx_buffer = [0; BUFF_SZ];
+    let mut rx_meta = alloc::vec![PacketMetadata::EMPTY; 16];
+    let mut rx_buffer = alloc::vec![0; BUFF_SZ];
+    let mut tx_meta = alloc::vec![PacketMetadata::EMPTY; 16];
+    let mut tx_buffer = alloc::vec![0; BUFF_SZ];
 
     let mut socket = UdpSocket::new(
         stack,

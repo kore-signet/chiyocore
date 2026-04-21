@@ -7,8 +7,10 @@
 use core::marker::PhantomData;
 
 use alloc::sync::Arc;
+use chiyo_hal::meshcore::{identity::LocalIdentity, payloads::AdvertisementExtraData};
 use chiyo_hal::{
     EspMutex, embassy_net, embassy_sync, embassy_time, esp_hal, esp_storage, esp_sync,
+    storage::{ChiyoFilesystem, FsPartition, PersistedObject},
 };
 use defmt::info;
 use embassy_executor::Spawner;
@@ -23,9 +25,8 @@ use esp_hal::{
 };
 use esp_storage::FlashStorage;
 use esp_sync::NonReentrantMutex;
-use meshcore::{identity::LocalIdentity, payloads::AdvertisementExtraData};
 use ouroboros::self_referencing;
-use thingbuf::mpsc::StaticReceiver;
+use thingbuf::{mpsc::StaticReceiver, recycling::WithCapacity};
 
 use crate::{
     DataWithSnr,
@@ -35,7 +36,6 @@ use crate::{
         MeshLayerGet, SimpleMesh,
         storage::{MeshStorage, message_log::MessageLog},
     },
-    storage::{ActiveFilesystem, FS_SIZE, FsPartition, PersistedObject, SimpleFileDb},
 };
 
 pub trait BuildChiyocoreLayer {
@@ -64,14 +64,14 @@ pub trait BuildChiyocoreSet {
 
 pub struct ChiyocoreNode<L: BuildChiyocoreLayer>(
     LocalIdentity,
-    PersistedObject<AdvertisementExtraData<'static>, { FS_SIZE }>,
+    PersistedObject<AdvertisementExtraData<'static>>,
     PhantomData<L>,
 );
 
 impl<L: BuildChiyocoreLayer> ChiyocoreNode<L> {
     pub fn new(
         identity: LocalIdentity,
-        advert: PersistedObject<AdvertisementExtraData<'static>, { FS_SIZE }>,
+        advert: PersistedObject<AdvertisementExtraData<'static>>,
     ) -> Self {
         ChiyocoreNode(identity, advert, PhantomData)
     }
@@ -111,9 +111,9 @@ pub struct Chiyocore<L: 'static, D> {
     pub base_peripherals: ChiyocorePeripheralSet,
     pub fs: ChiyocoreFs,
     pub lora_channel: LoraTaskChannel,
-    pub lora_rx: StaticReceiver<DataWithSnr>,
+    pub lora_rx: StaticReceiver<DataWithSnr, WithCapacity>,
     pub setup_data: D,
-    hosted_node: Option<L>, // hosted_nodes: Vec<Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>>
+    hosted_node: Option<L>,
 }
 
 #[embassy_executor::task]
@@ -172,14 +172,8 @@ impl<T: 'static> Chiyocore<T, ChiyocoreSetupData> {
         &self.base_peripherals.rtc
     }
 
-    pub fn main_fs(
-        &self,
-    ) -> &Arc<EspMutex<ActiveFilesystem<{ partition_table::MESHCORE_DATA.size as usize }>>> {
+    pub fn main_fs(&self) -> &ChiyoFilesystem {
         &self.fs.main_fs
-    }
-
-    pub fn config_db(&self) -> &SimpleFileDb<{ partition_table::MESHCORE_DATA.size as usize }> {
-        &self.fs.config_db
     }
 
     pub fn mesh_storage(&self) -> &MeshStorage {
@@ -250,10 +244,9 @@ impl<L: TaskChannelHandler + 'static> Chiyocore<L, ()> {
 
 /// Required filesystems, constructed and usable for handler layers.
 pub struct ChiyocoreFs {
-    pub main_fs: Arc<EspMutex<ActiveFilesystem<{ partition_table::MESHCORE_DATA.size as usize }>>>,
+    pub main_fs: ChiyoFilesystem,
     pub log_fs: Arc<EspMutex<MessageLog>>,
     pub mesh_storage: MeshStorage,
-    pub config_db: SimpleFileDb<{ partition_table::MESHCORE_DATA.size as usize }>,
 }
 
 impl ChiyocoreFs {
@@ -261,18 +254,18 @@ impl ChiyocoreFs {
         let main_part = FsPartition {
             storage: Arc::clone(flash),
             partition_offset: partition_table::MESHCORE_DATA.offset as usize,
+            partition_size: partition_table::MESHCORE_DATA.size as usize,
         };
 
         let log_part = FsPartition {
             storage: Arc::clone(flash),
             partition_offset: partition_table::LOGS.offset as usize,
+            partition_size: partition_table::LOGS.size as usize,
         };
 
-        let main_fs = Arc::new(EspMutex::new(ActiveFilesystem::build(main_part)));
+        let main_fs = ChiyoFilesystem::new(main_part).await.unwrap();
 
         ChiyocoreFs {
-            config_db: SimpleFileDb::new(Arc::clone(&main_fs), littlefs2::path!("/globalconf/"))
-                .await,
             mesh_storage: MeshStorage::new(&main_fs).await,
             main_fs,
             log_fs: Arc::new(EspMutex::new(MessageLog::new(log_part))),

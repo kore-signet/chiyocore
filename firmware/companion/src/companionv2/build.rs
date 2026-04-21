@@ -34,14 +34,13 @@ impl BuildChiyocoreLayer for Companion {
         add_channels(&mut *chiyocore.mesh_storage().channels.write().await).await;
 
         let (tcp_tx, tcp_rx) = thingbuf::mpsc::channel(16);
-        let slot = &config.id;
+        let _slot = &config.id;
         // let (tcp_tx, tcp_rx) = crate::companion_protocol::tcp::TCP_COMPANION_CHANNEL.split();
 
         let companion = Arc::new(EspMutex::new(
             Companion::new(
                 chiyocore.rtc(),
                 chiyocore.mesh_storage().clone(),
-                chiyocore.config_db(),
                 chiyocore.log_fs(),
                 mesh,
                 ChannelCompanionSink::new(tcp_tx),

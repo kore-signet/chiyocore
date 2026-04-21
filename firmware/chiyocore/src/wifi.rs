@@ -3,7 +3,7 @@ use alloc::string::String;
 use chiyo_hal::{
     embassy_futures::{self, select::Either},
     embassy_net, embassy_time, esp_hal,
-    esp_radio::{self, wifi::CountryInfo},
+    esp_radio::{self},
 };
 use embassy_executor::Spawner;
 use embassy_time::Duration;
@@ -14,7 +14,7 @@ use embassy_time::Timer;
 use esp_hal::peripherals::WIFI;
 use esp_radio::wifi::{ControllerConfig, Interface, WifiController, sta::StationConfig};
 
-use crate::mk_static;
+use chiyo_hal::mk_static;
 
 #[embassy_executor::task]
 async fn connection(mut controller: WifiController<'static>) {

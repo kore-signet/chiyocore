@@ -11,13 +11,14 @@ pub mod partition_table;
 pub mod ping_bot;
 pub mod psram_vec;
 pub mod simple_mesh;
-pub mod storage;
 pub mod timing;
 pub mod wifi;
 
-use chiyo_hal::esp_hal;
+use alloc::vec::Vec;
+pub use chiyo_hal::meshcore;
+use chiyo_hal::{esp_hal, storage::DirKey};
 pub use lora_phy::mod_params::PacketStatus;
-pub use meshcore;
+use thingbuf::{Recycle, recycling::WithCapacity};
 
 use core::fmt::Debug;
 
@@ -37,43 +38,26 @@ extern crate alloc;
 
 pub type BumpaloVec<'a, T> = bumpalo::collections::Vec<'a, T>;
 
+pub use chiyo_hal::{FirmwareError, FirmwareResult};
 pub use static_cell;
 
-#[derive(Debug, defmt::Format)]
-pub enum FirmwareError {
-    // #[error("storage: {0:?}")]
-    Storage(#[defmt(Debug2Format)] littlefs2::io::Error),
-    // #[error("radio: {0:?}")]
-    LoRa(#[defmt(Debug2Format)] lora_phy::mod_params::RadioError),
-    Postcard(#[defmt(Debug2Format)] postcard::Error),
-}
-
-impl From<littlefs2::io::Error> for FirmwareError {
-    fn from(value: littlefs2::io::Error) -> Self {
-        FirmwareError::Storage(value)
-    }
-}
-
-impl From<lora_phy::mod_params::RadioError> for FirmwareError {
-    fn from(value: lora_phy::mod_params::RadioError) -> Self {
-        FirmwareError::LoRa(value)
-    }
-}
-
-impl From<postcard::Error> for FirmwareError {
-    fn from(value: postcard::Error) -> Self {
-        FirmwareError::Postcard(value)
-    }
-}
-
-pub type FirmwareResult<T> = Result<T, FirmwareError>;
-
 #[derive(Clone)]
-pub struct DataWithSnr(pub heapless::Vec<u8, 256>, pub PacketStatus);
+pub struct DataWithSnr(pub Vec<u8>, pub PacketStatus);
 
 impl Default for DataWithSnr {
     fn default() -> Self {
         Self(Default::default(), PacketStatus { rssi: 0, snr: 0 })
+    }
+}
+
+impl Recycle<DataWithSnr> for WithCapacity {
+    fn new_element(&self) -> DataWithSnr {
+        DataWithSnr(self.new_element(), PacketStatus { rssi: 0, snr: 0 })
+    }
+
+    fn recycle(&self, element: &mut DataWithSnr) {
+        self.recycle(&mut element.0);
+        element.1 = PacketStatus { rssi: 0, snr: 0 };
     }
 }
 
@@ -87,17 +71,6 @@ pub trait MeshcoreHandler {
         bytes: &[u8],
         layers: &mut impl SimpleMeshLayer,
     ) -> impl core::future::Future<Output = Result<(), Self::Error>>;
-}
-
-#[macro_export]
-macro_rules! mk_static {
-    ($t:ty,$val:expr) => {{
-        static STATIC_CELL: $crate::static_cell::StaticCell<$t> =
-            $crate::static_cell::StaticCell::new();
-        #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write($val);
-        x
-    }};
 }
 
 #[derive(Debug, defmt::Format)]
@@ -130,3 +103,5 @@ impl From<esp_hal::aes::Error> for CompanionError {
 }
 
 pub type CompanionResult<T> = Result<T, CompanionError>;
+
+pub const GLOBAL_VARS_DIR: DirKey = DirKey::const_new(b"chiyoglobalvars");

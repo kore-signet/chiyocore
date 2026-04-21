@@ -11,21 +11,6 @@ use crate::{
     config::{ChiyocoreBaseConf, FirmwareConfig, FullConfig, LayerConfig, NodeConfig},
 };
 
-fn fmt_litemap(lm: LiteMap<String, String>) -> impl FormatInto<Rust> {
-    let lm = lm
-        .into_tuple_vec()
-        .into_iter()
-        .map(|(k, v)| quote! { ($[str]($[const](k)).into(), $[str]($[const](v)).into())});
-
-    // LiteMap::from_i
-
-    quote_fn! {
-        litemap::LiteMap::from_iter([
-            $(for kv in lm join (, ) => $kv)
-        ])
-    }
-}
-
 fn gen_layer_types(nodes: impl Iterator<Item = LayerConfig>) -> impl FormatInto<Rust> {
     let nodes = nodes.into_iter().map(|k| k.kind).collect::<Vec<String>>();
     quote_fn! {
@@ -85,7 +70,7 @@ fn load_and_add_nodes(nodes: HashMap<String, NodeConfig>) -> impl FormatInto<Rus
         let layer_tys = gen_layer_types(layers.clone().into_values());
         let role = role_to_tokens(role);
         quote_fn! {
-            load_node_slot::<$layer_tys>($[str]($[const](name)), $role, c$[str]($[const](id)), &slot_db).await
+            load_node_slot::<$layer_tys>($[str]($[const](name)), $role, $[str]($[const](id)), &slot_db).await
         }
     });
 
@@ -97,7 +82,11 @@ fn load_and_add_nodes(nodes: HashMap<String, NodeConfig>) -> impl FormatInto<Rus
 fn node_load_fn() -> impl FormatInto<Rust> {
     quote_fn! {
         use chiyocore::meshcore::payloads::{AppdataFlags, AdvertType, AdvertisementExtraData};
-        async fn load_node_slot<T: chiyocore::builder::BuildChiyocoreLayer>(name: &'static str, advert_role: AdvertType, slot: &CStr, slot_db: &SimpleFileDb<{ chiyocore::storage::FS_SIZE }>) -> ChiyocoreNode<T> {
+
+        const NODE_SLOT_DIR: DirKey = DirKey::const_new(b"chiyonodeslots");
+        const NODE_ADVERT_DIR: DirKey = DirKey::const_new(b"chiyoadvertslots");
+
+        async fn load_node_slot<T: chiyocore::builder::BuildChiyocoreLayer>(name: &'static str, advert_role: AdvertType, slot: &'static str, slot_db: &ChiyoFilesystem) -> ChiyocoreNode<T> {
                 let advert_flags = match advert_role {
                     AdvertType::None => AppdataFlags::HAS_NAME,
                     AdvertType::ChatNode => AppdataFlags::HAS_NAME | AppdataFlags::IS_CHAT_NODE,
@@ -115,17 +104,12 @@ fn node_load_fn() -> impl FormatInto<Rust> {
                     name: Some(name.as_bytes().into()),
                 };
 
-                // let advert = slot_db.get_persistable()
-
-                let advert_key = alloc::format!("{}-advert", slot.to_string_lossy());
-                let mut advert_key = advert_key.into_bytes();
-                advert_key.push(0);
-                let advert_key = alloc::ffi::CString::from_vec_with_nul(advert_key).unwrap();
-                let advert = slot_db.get_persistable(&advert_key, || def_advert).await.unwrap();
+                
+                let advert = slot_db.get_persistable(NODE_ADVERT_DIR, NODE_ADVERT_DIR.file(slot.as_bytes()), || def_advert).await.unwrap();
 
 
                 let identity = if let Some(id) = slot_db
-                    .get::<LocalIdentity>(slot)
+                    .get_deser::<512, LocalIdentity>(NODE_SLOT_DIR.file(slot.as_bytes()))
                     .await
                     .unwrap()
                 {
@@ -135,7 +119,8 @@ fn node_load_fn() -> impl FormatInto<Rust> {
                     let seed = ed25519_compact::Seed::new(bytes);
                     let sk = ed25519_compact::KeyPair::from_seed(seed);
                     let id = LocalIdentity::from_sk(*sk.sk);
-                    slot_db.insert(slot, &id).await.unwrap();
+                    let id_ser = chiyo_hal::postcard::to_allocvec(&id).unwrap();
+                    slot_db.set(NODE_SLOT_DIR, NODE_SLOT_DIR.file(slot.as_bytes()), &id_ser).await.unwrap();
                     id
                 };
                 let node: ChiyocoreNode<T> = ChiyocoreNode::new(identity, advert);
@@ -181,7 +166,17 @@ pub fn gen_main(BoardFile { ram, pins }: BoardFile, conf: FullConfig) -> String 
         default_channels,
     } = chiyocore;
 
-    let global_conf = fmt_litemap(config);
+    let global_config_inserts = config.into_iter().map(|(k,v)| {
+        let k2 = k.clone();
+        quote! {
+            chiyocore.main_fs().get_or_insert::<512, (SmolStr, SmolStr)>(
+                chiyocore::GLOBAL_VARS_DIR,
+                chiyocore::GLOBAL_VARS_DIR.file($[str]($[const](k)).as_bytes()),
+                ($[str]($[const](k2)).into(), $[str]($[const](v)).into())
+            ).await.unwrap();
+        }
+    });
+
     let gen_task = generate_task(stackup.clone().into_values());
     let nodes = load_and_add_nodes(stackup.clone());
     let node_load_f = node_load_fn();
@@ -226,24 +221,20 @@ pub fn gen_main(BoardFile { ram, pins }: BoardFile, conf: FullConfig) -> String 
 
             $channels
 
-            let slot_db = SimpleFileDb::new(Arc::clone(chiyocore.main_fs()), littlefs2::path!("/node_slots/")).await;
-
-            let global_conf = chiyocore
-                .config_db()
-                .get_persistable::<LiteMap<SmolStr, SmolStr>>(c"general", || {
-                    $global_conf
-                }).await.unwrap();
+            $(for c in global_config_inserts => $c)
 
             let net_stack = chiyocore.add_network(
                 &spawner,
                 peripherals.WIFI,
-                &global_conf[&"wifi.ssid".into()],
-                &global_conf[&"wifi.pw".into()]
+                &chiyocore.main_fs().get_deser::<128, (SmolStr, SmolStr)>(chiyocore::GLOBAL_VARS_DIR.file(b"wifi.ssid")).await.unwrap().unwrap().1,
+                &chiyocore.main_fs().get_deser::<128, (SmolStr, SmolStr)>(chiyocore::GLOBAL_VARS_DIR.file(b"wifi.pw")).await.unwrap().unwrap().1,
             )
             .await;
 
             net_stack.wait_config_up().await;
             defmt::info!("network connected - ip {}", net_stack.config_v4().unwrap().address);
+
+            let slot_db = chiyocore.main_fs().clone();
 
             let chiyocore = $nodes;
             // let global_conf = $global_conf;

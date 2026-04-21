@@ -1,6 +1,5 @@
-use alloc::boxed::Box;
 use alloc::{sync::Arc, vec::Vec};
-use chiyo_hal::EspMutex;
+use chiyo_hal::{EspMutex, box_array};
 use chiyo_hal::{embassy_futures, embassy_net, embassy_time, embedded_io_async};
 use defmt::{Debug2Format, error, info};
 use embassy_net::tcp::{State, TcpSocket};
@@ -44,10 +43,10 @@ pub async fn tcp_companion(
     handler: Arc<EspMutex<Companion>>,
     port: u16,
 ) {
-    let mut tcp_rx_buf = Box::new([0u8; 4096]);
-    let mut tcp_tx_buf = Box::new([0u8; 4096]);
+    let mut tcp_rx_buf = box_array::<u8, 4096>(0);
+    let mut tcp_tx_buf = box_array::<u8, 4096>(0);
 
-    let mut read_buf = Box::new([0u8; 255]);
+    let mut read_buf = box_array::<u8, 256>(0);
     let mut write_scratch: Vec<u8> = Vec::new();
 
     let mut tcp = TcpSocket::new(stack, &mut tcp_rx_buf[..], &mut tcp_tx_buf[..]);

@@ -1,8 +1,8 @@
 use alloc::{borrow::Cow, format, sync::Arc, vec::Vec};
 use chiyo_hal::{EspMutex, embassy_sync, esp_hal, esp_sync};
 // use chiyocore_config::PingBotConfig;
+use chiyo_hal::meshcore::{self, payloads::TextMessageData};
 use esp_hal::rtc_cntl::Rtc;
-use meshcore::payloads::TextMessageData;
 use serde::{Deserialize, Serialize};
 use smol_str::{SmolStr, ToSmolStr};
 

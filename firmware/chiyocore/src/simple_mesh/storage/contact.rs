@@ -1,13 +1,10 @@
-use alloc::{string::String, sync::Arc, vec::Vec};
+use alloc::{string::String, vec::Vec};
 use base64::{Engine, prelude::BASE64_URL_SAFE};
-use chiyo_hal::EspMutex;
-use meshcore::{Path, identity::ForeignIdentity};
+use chiyo_hal::meshcore::{Path, identity::ForeignIdentity};
+use chiyo_hal::storage::{ChiyoFilesystem, DirKey};
 use serde::{Deserialize, Serialize};
 
-use crate::{
-    FirmwareResult,
-    storage::{ActiveFilesystem, FS_SIZE, SimpleFileDb},
-};
+use crate::FirmwareResult;
 
 #[derive(Serialize, Deserialize)]
 pub struct Contact {
@@ -49,24 +46,42 @@ fn contact_b64_key(key: &[u8; 32]) -> heapless::CString<{ CONTACT_KEY_SIZE + 1 }
     heapless::CString::from_bytes_with_nul(&s).unwrap()
 }
 
+pub const CONTACT_DIR: DirKey = DirKey::const_new(b"contacts");
+
 /// Flash-backed storage for contacts. If you only need a contact's key and the path to reach them, prefer using the fast_get() method and hot_cache, since these do not involve costly flash reads.
 pub struct ContactStorage {
     pub hot_cache: Vec<CachedContact>,
-    pub fs: SimpleFileDb<FS_SIZE>,
+    pub fs: ChiyoFilesystem,
 }
 
 impl ContactStorage {
-    pub async fn new(fs: Arc<EspMutex<ActiveFilesystem<FS_SIZE>>>) -> ContactStorage {
-        let fs = SimpleFileDb::new(fs, littlefs2::path!("/contacts/")).await;
+    pub async fn new(fs: ChiyoFilesystem) -> ContactStorage {
+        // let fs = SimpleFileDb::new(fs, littlefs2::path!("/contacts/")).await;
         // fs.
-        let mut cache = fs
-            .entries::<Contact, CachedContact>(CachedContact::from_full)
-            .await
-            .unwrap();
-        cache.sort_unstable_by_key(|k| k.key);
+        // let mut cache = fs
+        //     .entries::<Contact, CachedContact>(CachedContact::from_full)
+        //     .await
+        //     .unwrap();
+
+        let entries = if let Some(entries) = fs.directory_entries(CONTACT_DIR).await.unwrap() {
+            let mut cache: Vec<CachedContact> = Vec::with_capacity(entries.len());
+            let mut entries = entries.reader(&fs);
+
+            while let Some(entry) = entries.next_file().await {
+                let entry = entry.unwrap();
+                let entry: Contact = postcard::from_bytes(entry).unwrap();
+
+                cache.push(CachedContact::from_full(entry));
+            }
+
+            cache.sort_unstable_by_key(|k| k.key);
+            cache
+        } else {
+            Vec::new()
+        };
 
         ContactStorage {
-            hot_cache: cache,
+            hot_cache: entries,
             fs,
         }
     }
@@ -76,13 +91,20 @@ impl ContactStorage {
     }
 
     pub async fn full_get(&self, key: [u8; 32]) -> FirmwareResult<Option<Contact>> {
-        let fs_key = contact_b64_key(&key);
-        self.fs.get::<Contact>(&fs_key).await
+        self.fs
+            .get_deser::<512, Contact>(CONTACT_DIR.file(&key))
+            .await
     }
 
     pub async fn insert(&mut self, contact: Contact) -> FirmwareResult<()> {
-        let fs_key = contact_b64_key(&contact.key);
-        self.fs.insert(&fs_key, &contact).await?;
+        // let fs_key = contact_b64_key(&contact.key);
+        self.fs
+            .set(
+                CONTACT_DIR,
+                CONTACT_DIR.file(&contact.key),
+                &postcard::to_vec::<_, 512>(&contact)?,
+            )
+            .await?;
 
         let contact = CachedContact {
             key: contact.key,
@@ -105,7 +127,8 @@ impl ContactStorage {
             return;
         };
         let _cached = self.hot_cache.remove(idx);
-        self.fs.delete(&contact_b64_key(&key)).await;
+        self.fs.delete(CONTACT_DIR.file(&key)).await;
+        // self.fs.delete(&contact_b64_key(&key)).await;
     }
 
     pub fn find_idx(&self, prefix: &[u8]) -> Option<usize> {

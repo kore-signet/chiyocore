@@ -42,9 +42,6 @@ opt-level = 3
 [profile.dev.package.esp-rtos]
 opt-level = 3
 
-[profile.dev.package.esp-bootloader-esp-idf]
-opt-level = 3
-
 [profile.dev.package.esp-alloc]
 opt-level = 3
 
@@ -52,11 +49,4 @@ opt-level = 3
 opt-level = 3
 
 [profile.dev.package.esp-println]
-opt-level = 3
-
-[profile.dev.package.p384]
-opt-level = 3
-debug = false
-
-[profile.dev.package.mbedtls-rs]
 opt-level = 3

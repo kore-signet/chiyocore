@@ -1,17 +1,14 @@
-use alloc::{borrow::ToOwned, ffi::CString, string::String, sync::Arc};
+use alloc::{borrow::ToOwned, string::String, sync::Arc};
 use chiyo_hal::{EspMutex, EspRwLock, esp_hal};
 use chiyocore::{CompanionError, PacketStatus, meshcore};
 use defmt::{Debug2Format, error, info};
 use esp_hal::rtc_cntl::Rtc;
-use litemap::LiteMap;
 use meshcore::{
     Packet, SerDeser,
     identity::LocalIdentity,
     payloads::{Ack, Advert, ReturnedPath, TextMessageData},
     repeater_protocol::LoginResponse,
 };
-use serde::{Deserialize, Serialize};
-use smol_str::SmolStr;
 
 use crate::companion_protocol::protocol::{
     ChannelCompanionSink, CompanionSink,
@@ -25,7 +22,6 @@ use chiyocore::{
         storage::packet_log::SavedMessage,
         storage::{MeshStorage, channel::Channel, contact::CachedContact},
     },
-    storage::{ActiveFilesystem, FS_SIZE, PersistedObject, SimpleFileDb},
 };
 
 mod build;
@@ -33,7 +29,6 @@ pub mod companion_proto_handler;
 
 pub struct Companion {
     name: String,
-    global_config: PersistedObject<LiteMap<SmolStr, SmolStr>, FS_SIZE>,
     identity: LocalIdentity,
     storage: MeshStorage,
     mesh: Arc<EspRwLock<SimpleMesh>>,
@@ -49,7 +44,6 @@ impl Companion {
     pub async fn new(
         rtc: &Arc<Rtc<'static>>,
         shared_storage: MeshStorage,
-        global_cfg_db: &SimpleFileDb<FS_SIZE>,
         msg_log: &Arc<EspMutex<MessageLog>>,
         mesh: &Arc<EspRwLock<SimpleMesh>>,
         companion_sink: ChannelCompanionSink,
@@ -60,14 +54,7 @@ impl Companion {
 
         let identity = mesh.read().await.identity.clone();
 
-        let global_cfg = global_cfg_db
-            .get_persistable(c"general", LiteMap::new)
-            .await?;
-
-        // let msg_log = MessageLog::new(log_fs);
-
         Ok(Companion {
-            global_config: global_cfg,
             companion_sink,
             identity,
             storage: shared_storage,

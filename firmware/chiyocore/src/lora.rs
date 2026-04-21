@@ -7,7 +7,8 @@ use defmt::{Debug2Format, error, info, trace};
 
 use core::time::Duration;
 
-use alloc::sync::Arc;
+use alloc::{sync::Arc, vec::Vec};
+use chiyo_hal::meshcore::{self, Packet, PacketHeader, PacketPayload, Path, RouteType, SerDeser};
 use embassy_executor::SendSpawner;
 use embassy_futures::select::Either;
 use embassy_sync::rwlock::RwLock;
@@ -20,10 +21,12 @@ use lora_phy::{
     mod_params::{ModulationParams, PacketParams, PacketStatus},
     mod_traits::IrqState,
 };
-use meshcore::{Packet, PacketHeader, PacketPayload, Path, RouteType, SerDeser};
 use rand::Rng;
 use static_cell::StaticCell;
-use thingbuf::{mpsc::StaticChannel, recycling::DefaultRecycle};
+use thingbuf::{
+    mpsc::StaticChannel,
+    recycling::WithCapacity,
+};
 
 use crate::{
     DataWithSnr, FirmwareError, FirmwareResult, MeshcoreHandler,
@@ -156,15 +159,11 @@ pub async fn lora_init<T: LoraPins>(
 ) -> lora_phy::LoRa<Sx1262Radio<'static>, embassy_time::Delay> {
     let pins = pins.into_bundle();
 
-    let _board_en = if let Some(board_en) = pins.board_en {
-        Some(esp_hal::gpio::Output::new(
+    let _board_en = pins.board_en.map(|board_en| esp_hal::gpio::Output::new(
             board_en,
             esp_hal::gpio::Level::High,
             OutputConfig::default(),
-        ))
-    } else {
-        None
-    };
+        ));
 
     // let board_en =
 
@@ -310,8 +309,8 @@ impl Radio {
     /// Loop receiving messages, as well as sending when needed (to_send)
     async fn run(
         &mut self,
-        received_tx: &mut thingbuf::mpsc::StaticSender<DataWithSnr, DefaultRecycle>,
-        to_send: &mut thingbuf::mpsc::StaticReceiver<heapless::Vec<u8, 256>, DefaultRecycle>,
+        received_tx: &mut thingbuf::mpsc::StaticSender<DataWithSnr, WithCapacity>,
+        to_send: &mut thingbuf::mpsc::StaticReceiver<Vec<u8>, WithCapacity>,
     ) -> FirmwareResult<()> {
         self.prepare_for_rx().await?;
         self.lora.start_rx().await?;
@@ -342,7 +341,7 @@ impl Radio {
                         .await?;
                     let received = &self.buf[..received_len as usize];
                     let mut tx_slot = received_tx.send_ref().await.unwrap(); // todo no unwrappin
-                    let _ = tx_slot.0.extend_from_slice(received);
+                    tx_slot.0.extend_from_slice(received);
                     tx_slot.1 = received_status;
                     drop(tx_slot);
 
@@ -385,8 +384,8 @@ impl Radio {
 #[embassy_executor::task]
 pub async fn lora_task(
     mut radio: Radio,
-    mut received: thingbuf::mpsc::StaticSender<DataWithSnr, DefaultRecycle>,
-    mut to_send: thingbuf::mpsc::StaticReceiver<heapless::Vec<u8, 256>, DefaultRecycle>,
+    mut received: thingbuf::mpsc::StaticSender<DataWithSnr, WithCapacity>,
+    mut to_send: thingbuf::mpsc::StaticReceiver<Vec<u8>, WithCapacity>,
 ) {
     loop {
         if let Err(e) = radio.run(&mut received, &mut to_send).await {
@@ -395,13 +394,23 @@ pub async fn lora_task(
     }
 }
 
-static LORA_TRANSMIT_CHANNEL: StaticChannel<heapless::Vec<u8, 256>, 16> = StaticChannel::new();
-static LORA_RECEIVE_CHANNEL: StaticChannel<DataWithSnr, 16> = StaticChannel::new();
+static LORA_TRANSMIT_CHANNEL: StaticChannel<Vec<u8>, 16, WithCapacity> =
+    StaticChannel::with_recycle(
+        WithCapacity::new()
+            .with_min_capacity(256)
+            .with_max_capacity(256),
+    );
+static LORA_RECEIVE_CHANNEL: StaticChannel<DataWithSnr, 16, WithCapacity> =
+    StaticChannel::with_recycle(
+        WithCapacity::new()
+            .with_min_capacity(256)
+            .with_max_capacity(256),
+    );
 
 #[embassy_executor::task(pool_size = 16)]
 async fn send_delayed(
-    tx: thingbuf::mpsc::StaticSender<heapless::Vec<u8, 256>>,
-    packet: heapless::Vec<u8, 256>,
+    tx: thingbuf::mpsc::StaticSender<Vec<u8>, WithCapacity>,
+    packet: Vec<u8>,
     delay: Duration,
 ) {
     embassy_time::Timer::after(embassy_time::Duration::from_micros(delay.as_micros() as u64)).await;
@@ -416,7 +425,7 @@ async fn send_delayed(
 #[derive(Clone)]
 pub struct LoraTaskChannel {
     // scratch: [u8; 256],
-    pub tx: thingbuf::mpsc::StaticSender<heapless::Vec<u8, 256>, DefaultRecycle>,
+    pub tx: thingbuf::mpsc::StaticSender<Vec<u8>, WithCapacity>,
 }
 
 impl LoraTaskChannel {
@@ -426,7 +435,7 @@ impl LoraTaskChannel {
         spawner: &embassy_executor::Spawner,
     ) -> (
         Self,
-        thingbuf::mpsc::StaticReceiver<DataWithSnr, DefaultRecycle>,
+        thingbuf::mpsc::StaticReceiver<DataWithSnr, WithCapacity>,
     ) {
         let (receive_tx, receive_rx) = LORA_RECEIVE_CHANNEL.split();
         let (transmit_tx, transmit_rx) = LORA_TRANSMIT_CHANNEL.split();
@@ -446,7 +455,7 @@ impl LoraTaskChannel {
     /// Run the specified set of handlers using the passed receive channel handle.
     pub async fn run_handler<L: TaskChannelHandler>(
         self,
-        rx: thingbuf::mpsc::StaticReceiver<DataWithSnr, DefaultRecycle>,
+        rx: thingbuf::mpsc::StaticReceiver<DataWithSnr, WithCapacity>,
         handler: L,
     ) {
         while let Some(rx_slot) = rx.recv_ref().await {
@@ -541,7 +550,7 @@ impl LoraTaskChannel {
 
     pub async fn send_delayed(&self, packet: &Packet<'_>, delay: Duration) -> Duration {
         let airtime = packet.timeout_est(&packet.path, packet.header.route_type());
-        let mut out = heapless::Vec::new();
+        let mut out = Vec::with_capacity(256);
         let _ = Packet::encode_into_vec(packet, &mut out);
 
         trace!("sending packet with delay: {}ms", delay.as_millis() as u64);

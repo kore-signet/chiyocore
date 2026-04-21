@@ -21,6 +21,7 @@ pub trait CompanionSer {
 pub mod responses {
     use alloc::borrow::Cow;
 
+    use alloc::vec::Vec;
     use chiyocore::PacketStatus;
     pub use chiyocore::simple_mesh::MsgSent;
     use chiyocore::simple_mesh::storage::contact::Contact;
@@ -28,12 +29,14 @@ pub mod responses {
         ChannelMsgRecv, ContactMsgRecv, SavedMessage,
     };
     use chiyocore::{CompanionError, FirmwareError, meshcore};
+    
     use meshcore::Path;
     use meshcore::io::SliceWriter;
     use meshcore::payloads::AppdataFlags;
     use meshcore::repeater_protocol::Permissions;
 
-    use smallvec::SmallVec;
+    
+    use smol_str::SmolStr;
 
     use super::CompanionSer;
     use super::ResponseCodes;
@@ -581,9 +584,9 @@ pub mod responses {
         }
     }
 
-    pub struct CustomVars<'a>(pub SmallVec<[(&'a str, &'a str); 8]>);
+    pub struct CustomVars(pub Vec<(SmolStr, SmolStr)>);
 
-    impl<'a> CompanionSer for CustomVars<'a> {
+    impl<'a> CompanionSer for CustomVars {
         fn ser_size(&self) -> usize {
             1 + self
                 .0
@@ -1358,9 +1361,7 @@ pub trait CompanionHandler {
         &mut self,
     ) -> impl Future<Output = CompanionProtoResult<responses::PrivateKeyResponse>>;
 
-    fn get_custom_vars<'s>(
-        &'s mut self,
-    ) -> impl Future<Output = CompanionProtoResult<CustomVars<'s>>>;
+    fn get_custom_vars(&mut self) -> impl Future<Output = CompanionProtoResult<CustomVars>>;
 
     fn set_custom_var(
         &mut self,

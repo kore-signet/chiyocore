@@ -1,9 +1,9 @@
 use alloc::sync::Arc;
+use chiyo_hal::meshcore::identity::{ForeignIdentity, LocalIdentity};
 use chiyo_hal::{embassy_sync, esp_sync};
 use ed25519_compact::x25519::{self};
 use embassy_sync::rwlock::RwLock;
 use litemap::LiteMap;
-use meshcore::identity::{ForeignIdentity, LocalIdentity};
 
 use crate::psram_vec::PSRAMVec;
 

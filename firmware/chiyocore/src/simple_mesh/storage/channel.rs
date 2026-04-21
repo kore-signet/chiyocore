@@ -1,18 +1,17 @@
-use alloc::{sync::Arc, vec::Vec};
-use chiyo_hal::EspMutex;
-use heapless::CString;
+use alloc::vec::Vec;
+use chiyo_hal::meshcore::crypto::ChannelKeys;
+use chiyo_hal::{
+    FirmwareError,
+    storage::{ChiyoFilesystem, DirKey},
+};
 use litemap::LiteMap;
-use meshcore::crypto::ChannelKeys;
 use serde::{Deserialize, Serialize};
 use smol_str::SmolStr;
 
-use crate::{
-    CompanionResult, FirmwareResult,
-    storage::{ActiveFilesystem, FS_SIZE, SimpleFileDb},
-};
+use crate::{CompanionResult, FirmwareResult};
 
 /// A stored channel, with an assigned name and index/slot.
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Channel {
     pub name: SmolStr,
     pub key: [u8; 16],
@@ -38,6 +37,8 @@ impl Channel {
     }
 }
 
+pub const CHANNEL_KEY: DirKey = DirKey::const_new(b"channels");
+
 /// Flash-backed storage for channels. Channels are stored by three keys:
 /// - hash -> first byte of the sha256 digest of the channel's secret key
 /// - name -> registered name for the channel
@@ -46,24 +47,35 @@ pub struct ChannelStorage {
     by_hash: LiteMap<u8, u8>,
     by_name: LiteMap<SmolStr, u8>,
     cache: Vec<Channel>,
-    db: SimpleFileDb<FS_SIZE>,
+    db: ChiyoFilesystem,
 }
 
 impl ChannelStorage {
-    pub async fn new(
-        fs: Arc<EspMutex<ActiveFilesystem<FS_SIZE>>>,
-    ) -> CompanionResult<ChannelStorage> {
-        let db = SimpleFileDb::new(fs, littlefs2::path!("/channels/")).await;
+    pub async fn new(fs: ChiyoFilesystem) -> CompanionResult<ChannelStorage> {
+        // let db = SimpleFileDb::new(fs, littlefs2::path!("/channels/")).await;
 
-        let entries = db.entries::<Channel, Channel>(|c| c).await?;
-        let by_hash = LiteMap::from_iter(entries.iter().map(|v| (v.hash, v.idx)));
-        let by_name = LiteMap::from_iter(entries.iter().map(|v| (v.name.clone(), v.idx)));
+        let entry_cache = if let Some(entries) = fs.directory_entries(CHANNEL_KEY).await? {
+            let mut entry_cache: Vec<Channel> = Vec::with_capacity(entries.len());
+            let mut entry_reader = entries.reader(&fs);
+            while let Some(entry) = entry_reader.next_file().await {
+                let entry = entry.unwrap();
+                entry_cache.push(postcard::from_bytes(entry).map_err(FirmwareError::Postcard)?);
+            }
+
+            entry_cache.sort_unstable_by_key(|v| v.idx);
+            entry_cache
+        } else {
+            Vec::new()
+        };
+
+        let by_hash = LiteMap::from_iter(entry_cache.iter().map(|v| (v.hash, v.idx)));
+        let by_name = LiteMap::from_iter(entry_cache.iter().map(|v| (v.name.clone(), v.idx)));
 
         Ok(ChannelStorage {
             by_hash,
             by_name,
-            cache: entries,
-            db,
+            cache: entry_cache,
+            db: fs,
         })
     }
 
@@ -83,10 +95,18 @@ impl ChannelStorage {
     }
 
     pub async fn insert(&mut self, channel: Channel) -> FirmwareResult<()> {
-        let mut key = CString::<4>::new();
-        let _ = key.extend_from_bytes(itoa::Buffer::new().format(channel.idx).as_bytes());
+        if let Some(existing) = self.get(channel.idx)
+            && &channel == existing {
+                return Ok(());
+            }
 
-        self.db.insert(&key, &channel).await?;
+        self.db
+            .set(
+                CHANNEL_KEY,
+                CHANNEL_KEY.file(&[channel.idx]),
+                &postcard::to_vec::<_, 128>(&channel)?,
+            )
+            .await?;
 
         self.by_hash.insert(channel.hash, channel.idx);
         self.by_name.insert(channel.name.clone(), channel.idx);

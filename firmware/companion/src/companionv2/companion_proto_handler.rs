@@ -1,8 +1,12 @@
 use alloc::{
     borrow::{Cow, ToOwned},
     string::String,
+    vec::Vec,
 };
-use chiyo_hal::esp_hal::rng::Trng;
+use chiyo_hal::{
+    FirmwareError,
+    esp_hal::rng::Trng,
+};
 use ed25519_compact::Noise;
 use meshcore::{
     Packet, PacketHeader, Path, PayloadType, RouteType, SerDeser,
@@ -12,7 +16,7 @@ use meshcore::{
         TextMessageData, TextType, TracePacket,
     },
 };
-use smol_str::ToSmolStr;
+use smol_str::{SmolStr, ToSmolStr};
 
 use crate::{
     companion_protocol::protocol::{
@@ -24,12 +28,10 @@ use crate::{
     companionv2::Companion,
 };
 use chiyocore::{
+    GLOBAL_VARS_DIR,
     lora::LORA_FREQUENCY_IN_HZ,
     meshcore,
-    simple_mesh::{
-        storage::packet_log::SavedMessage,
-        storage::{channel::Channel, contact::Contact},
-    },
+    simple_mesh::storage::{channel::Channel, contact::Contact, packet_log::SavedMessage},
 };
 
 impl CompanionHandler for Companion {
@@ -233,9 +235,7 @@ impl CompanionHandler for Companion {
 
     async fn reset_path(&mut self, pk: &[u8; 32]) -> CompanionProtoResult<responses::Ok> {
         let mut contacts = self.storage.contacts.write().await;
-        let Some(mut contact) = contacts.full_get(*pk).await? else {
-            return Err(responses::Err { code: None });
-        };
+        let mut contact = contacts.full_get(*pk).await?.unwrap();
 
         contact.path_to = None;
         contacts.insert(contact).await?;
@@ -360,13 +360,24 @@ impl CompanionHandler for Companion {
         })
     }
 
-    async fn get_custom_vars<'s>(&'s mut self) -> CompanionProtoResult<responses::CustomVars<'s>> {
-        Ok(responses::CustomVars(
-            self.global_config
-                .iter()
-                .map(|(k, v)| (k.as_str(), v.as_str()))
-                .collect(),
-        ))
+    async fn get_custom_vars(&mut self) -> CompanionProtoResult<responses::CustomVars> {
+        let custom_var_map =
+            if let Some(custom_vars) = self.storage.fs.directory_entries(GLOBAL_VARS_DIR).await? {
+                let mut custom_var_map = Vec::with_capacity(custom_vars.len());
+                let mut custom_vars = custom_vars.reader(&self.storage.fs);
+                while let Some(var) = custom_vars.next_file().await {
+                    let var = var?;
+                    let var: (SmolStr, SmolStr) =
+                        postcard::from_bytes(var).map_err(FirmwareError::Postcard)?;
+                    custom_var_map.push(var);
+                }
+                custom_var_map
+            } else {
+                Vec::new()
+            };
+
+        // let custom_vars = self.storage.fs.get_deser::<512, LiteMap<SmolStr, SmolStr>>(chiyo_hal::storage::GLOBAL_DIR.file(b"globalvars")).await?;
+        Ok(responses::CustomVars(custom_var_map))
     }
 
     async fn set_custom_var(
@@ -374,11 +385,14 @@ impl CompanionHandler for Companion {
         key: &str,
         val: &str,
     ) -> CompanionProtoResult<responses::Ok> {
-        self.global_config
-            .with_mut(|cfg| {
-                cfg.insert(key.into(), val.into());
-            })
+        let key_hash = GLOBAL_VARS_DIR.file(key.as_bytes());
+        let kv: (SmolStr, SmolStr) = (key.into(), val.into());
+        let kv = postcard::to_allocvec(&kv).map_err(FirmwareError::Postcard)?;
+        self.storage
+            .fs
+            .set(GLOBAL_VARS_DIR, key_hash, &kv)
             .await?;
+
         Ok(responses::Ok { code: None })
     }
 

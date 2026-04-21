@@ -1,17 +1,17 @@
-use alloc::borrow::Cow;
+use alloc::{borrow::Cow, collections::vec_deque::VecDeque};
 use arrayref::array_ref;
-use chiyo_hal::{EspMutex, esp_hal};
-use esp_hal::sha::Sha1Context;
-use meshcore::{
+use chiyo_hal::meshcore::{
     Packet, PayloadType,
     payloads::{TextMessageData, TextType},
 };
+use chiyo_hal::{EspMutex, esp_hal};
+use esp_hal::sha::Sha1Context;
 use serde::{Deserialize, Serialize};
 
 use crate::simple_mesh::storage::{channel::Channel, contact::CachedContact};
 
 pub struct HashLog<const CAPACITY: usize> {
-    log: EspMutex<heapless::Deque<[u8; 20], CAPACITY>>,
+    log: EspMutex<VecDeque<[u8; 20]>>,
 }
 
 impl<const CAPACITY: usize> Default for HashLog<CAPACITY> {
@@ -23,7 +23,7 @@ impl<const CAPACITY: usize> Default for HashLog<CAPACITY> {
 impl<const CAPACITY: usize> HashLog<CAPACITY> {
     pub fn new() -> HashLog<CAPACITY> {
         HashLog {
-            log: EspMutex::new(heapless::Deque::new()),
+            log: EspMutex::new(VecDeque::new()),
         }
     }
 
@@ -47,11 +47,11 @@ impl<const CAPACITY: usize> HashLog<CAPACITY> {
         }
 
         let mut log = self.log.lock().await;
-        if log.is_full() {
+        if log.len() >= CAPACITY {
             log.pop_back();
         }
 
-        let _ = log.push_front(hash);
+        log.push_front(hash);
         true
     }
 }
