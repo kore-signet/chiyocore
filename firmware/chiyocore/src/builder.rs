@@ -379,6 +379,7 @@ macro_rules! impl_chiyocore_layer_tuple {
 
         // pub struct ChiyocoreNode<L: BuildChiyocoreLayer>(LocalIdentity, PhantomData<L>);
 
+        #[allow(non_snake_case)]
         impl<$($var),*> BuildChiyocoreSet for ($(ChiyocoreNode<$var>),*) where $($var: BuildChiyocoreLayer),* {
             type Input = ($(<ChiyocoreNode<$var> as BuildChiyocoreSet>::Input),*);
             type Output = ($((Arc<RwLock<esp_sync::RawMutex, SimpleMesh>>, $var::Output)),*);

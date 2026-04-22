@@ -109,6 +109,7 @@ pub struct LoraPinBundle<
     pub spi: SPI,
 }
 
+#[allow(non_camel_case_types)]
 impl<
     SCLK: OutputPin + 'static,
     MOSI: OutputPin + 'static,
@@ -464,14 +465,6 @@ impl LoraTaskChannel {
                 continue;
             };
 
-            // let ctx = PacketContext {
-            //     packet: &packet,
-            //     packet_status: rx_slot.1,
-            //     bytes: &rx_slot.0[..],
-            //     handler: &handler,
-            // };
-
-            // layer.with_layer(ctx).await;
             handler.run(&packet, rx_slot.1, &rx_slot.0[..]).await;
 
             info!("packet took: {}", start.elapsed());

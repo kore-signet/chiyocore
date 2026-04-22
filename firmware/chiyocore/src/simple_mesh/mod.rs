@@ -28,7 +28,6 @@ use defmt::{error, info, trace};
 use embassy_executor::SendSpawner;
 use embassy_sync::rwlock::RwLock;
 use esp_hal::rtc_cntl::Rtc;
-use futures_util::FutureExt;
 use maitake_sync::{WaitCell, WaitMap};
 use rand::Rng;
 

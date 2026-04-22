@@ -1,5 +1,4 @@
 use alloc::{string::String, vec::Vec};
-use base64::{Engine, prelude::BASE64_URL_SAFE};
 use chiyo_hal::meshcore::{Path, identity::ForeignIdentity};
 use chiyo_hal::storage::{ChiyoFilesystem, DirKey};
 use serde::{Deserialize, Serialize};
@@ -37,15 +36,6 @@ impl CachedContact {
     }
 }
 
-const CONTACT_KEY_SIZE: usize = base64::encoded_len(32, true).unwrap();
-
-fn contact_b64_key(key: &[u8; 32]) -> heapless::CString<{ CONTACT_KEY_SIZE + 1 }> {
-    let mut s = [0u8; { CONTACT_KEY_SIZE + 1 }];
-    let _ = BASE64_URL_SAFE.encode_slice(key, &mut s);
-    s[CONTACT_KEY_SIZE] = 0x00;
-    heapless::CString::from_bytes_with_nul(&s).unwrap()
-}
-
 pub const CONTACT_DIR: DirKey = DirKey::const_new(b"contacts");
 
 /// Flash-backed storage for contacts. If you only need a contact's key and the path to reach them, prefer using the fast_get() method and hot_cache, since these do not involve costly flash reads.
@@ -56,13 +46,6 @@ pub struct ContactStorage {
 
 impl ContactStorage {
     pub async fn new(fs: ChiyoFilesystem) -> ContactStorage {
-        // let fs = SimpleFileDb::new(fs, littlefs2::path!("/contacts/")).await;
-        // fs.
-        // let mut cache = fs
-        //     .entries::<Contact, CachedContact>(CachedContact::from_full)
-        //     .await
-        //     .unwrap();
-
         let entries = if let Some(entries) = fs.directory_entries(CONTACT_DIR).await.unwrap() {
             let mut cache: Vec<CachedContact> = Vec::with_capacity(entries.len());
             let mut entries = entries.reader(&fs);
@@ -128,7 +111,6 @@ impl ContactStorage {
         };
         let _cached = self.hot_cache.remove(idx);
         self.fs.delete(CONTACT_DIR.file(&key)).await;
-        // self.fs.delete(&contact_b64_key(&key)).await;
     }
 
     pub fn find_idx(&self, prefix: &[u8]) -> Option<usize> {
