@@ -2,8 +2,7 @@ use std::collections::HashMap;
 
 // use chiyocore_config::{ChiyocoreConfig, };
 use genco::{Tokens, lang::Rust, quote, quote_fn, quote_in, tokens::FormatInto};
-use litemap::LiteMap;
-use meshcore::payloads::{AdvertType, AdvertisementExtraData, AppdataFlags};
+use meshcore::payloads::AdvertType;
 use rust_format::Formatter;
 
 use crate::{

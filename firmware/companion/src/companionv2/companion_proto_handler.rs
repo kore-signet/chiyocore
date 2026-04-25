@@ -3,10 +3,7 @@ use alloc::{
     string::String,
     vec::Vec,
 };
-use chiyo_hal::{
-    FirmwareError,
-    esp_hal::rng::Trng,
-};
+use chiyo_hal::{FirmwareError, esp_hal::rng::Trng};
 use ed25519_compact::Noise;
 use meshcore::{
     Packet, PacketHeader, Path, PayloadType, RouteType, SerDeser,
@@ -388,10 +385,7 @@ impl CompanionHandler for Companion {
         let key_hash = GLOBAL_VARS_DIR.file(key.as_bytes());
         let kv: (SmolStr, SmolStr) = (key.into(), val.into());
         let kv = postcard::to_allocvec(&kv).map_err(FirmwareError::Postcard)?;
-        self.storage
-            .fs
-            .set(GLOBAL_VARS_DIR, key_hash, &kv)
-            .await?;
+        self.storage.fs.set(GLOBAL_VARS_DIR, key_hash, &kv).await?;
 
         Ok(responses::Ok { code: None })
     }

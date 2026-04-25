@@ -6,965 +6,12 @@ use chiyocore::meshcore::{
     payloads::TextType,
 };
 use chiyocore::simple_mesh::storage::contact::Contact;
+use meshcore_companion_protocol::commands::{HostCommand, HostCommandType};
+use meshcore_companion_protocol::{CompanionSer, responses};
 use modular_bitfield::Specifier as _;
 use smallvec::SmallVec;
 use smol_str::SmolStr;
 use strum::FromRepr;
-
-use crate::companion_protocol::protocol::responses::{CompanionProtoResult, CustomVars};
-
-pub trait CompanionSer {
-    fn ser_size(&self) -> usize;
-    fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8];
-}
-
-pub mod responses {
-    use alloc::borrow::Cow;
-
-    use alloc::vec::Vec;
-    use chiyocore::PacketStatus;
-    pub use chiyocore::simple_mesh::MsgSent;
-    use chiyocore::simple_mesh::storage::contact::Contact;
-    use chiyocore::simple_mesh::storage::packet_log::{
-        ChannelMsgRecv, ContactMsgRecv, SavedMessage,
-    };
-    use chiyocore::{CompanionError, FirmwareError, meshcore};
-    
-    use meshcore::Path;
-    use meshcore::io::SliceWriter;
-    use meshcore::payloads::AppdataFlags;
-    use meshcore::repeater_protocol::Permissions;
-
-    
-    use smol_str::SmolStr;
-
-    use super::CompanionSer;
-    use super::ResponseCodes;
-    use crate::companion_protocol::protocol::NullPaddedString;
-    use crate::companion_protocol::protocol::StatTypes;
-
-    use super::NullPaddedSlice;
-
-    #[derive(Clone)]
-    pub enum GetMessageRes<'a> {
-        Contact(ContactMsgRecv<'a>),
-        Channel(ChannelMsgRecv<'a>),
-        NoMoreMessages,
-    }
-
-    impl<'a> CompanionSer for GetMessageRes<'a> {
-        fn ser_size(&self) -> usize {
-            match self {
-                GetMessageRes::Contact(contact_msg_recv) => contact_msg_recv.ser_size(),
-                GetMessageRes::Channel(channel_msg_recv) => channel_msg_recv.ser_size(),
-                GetMessageRes::NoMoreMessages => 1,
-            }
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            match self {
-                GetMessageRes::Contact(contact_msg_recv) => {
-                    contact_msg_recv.companion_serialize(out)
-                }
-                GetMessageRes::Channel(channel_msg_recv) => {
-                    channel_msg_recv.companion_serialize(out)
-                }
-                GetMessageRes::NoMoreMessages => {
-                    let mut out = SliceWriter::new(out);
-                    out.write_u8(ResponseCodes::NoMoreMessages as u8);
-                    out.finish()
-                }
-            }
-        }
-    }
-
-    pub type CompanionProtoResult<T> = Result<T, Err>;
-    // Res(T),
-    // Err(Err),
-    // }
-
-    impl<T: CompanionSer> CompanionSer for CompanionProtoResult<T> {
-        fn ser_size(&self) -> usize {
-            match self {
-                CompanionProtoResult::Ok(r) => r.ser_size(),
-                CompanionProtoResult::Err(e) => e.ser_size(),
-            }
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            match self {
-                CompanionProtoResult::Ok(r) => r.companion_serialize(out),
-                CompanionProtoResult::Err(e) => e.companion_serialize(out),
-            }
-        }
-    }
-
-    pub struct Ok {
-        pub code: Option<u32>,
-    }
-
-    impl CompanionSer for Ok {
-        fn ser_size(&self) -> usize {
-            1 + if self.code.is_some() { 4 } else { 0 }
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-            out.write_u8(ResponseCodes::Ok as u8);
-            if let Some(code) = self.code {
-                out.write_u32_le(code);
-            }
-            out.finish()
-        }
-    }
-
-    pub struct Err {
-        pub code: Option<u8>,
-    }
-
-    impl CompanionSer for Err {
-        fn ser_size(&self) -> usize {
-            1 + if self.code.is_some() { 1 } else { 0 }
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-            out.write_u8(ResponseCodes::Ok as u8);
-            if let Some(code) = self.code {
-                out.write_u8(code);
-            }
-            out.finish()
-        }
-    }
-
-    impl From<FirmwareError> for Err {
-        fn from(_value: FirmwareError) -> Self {
-            Err { code: None }
-        }
-    }
-
-    impl From<CompanionError> for Err {
-        fn from(_value: CompanionError) -> Self {
-            Err { code: None }
-        }
-    }
-
-    impl From<chiyo_hal::esp_hal::aes::Error> for Err {
-        fn from(_value: chiyo_hal::esp_hal::aes::Error) -> Self {
-            Err { code: None }
-        }
-    }
-
-    pub struct SelfInfo<'a> {
-        pub advertisement_type: u8,
-        pub tx_power: u8,
-        pub max_tx_power: u8,
-        pub public_key: [u8; 32],
-        pub lat: u32,
-        pub long: u32,
-        pub multi_acks: u8,
-        pub adv_loc_policy: u8,
-        pub telemetry_mode: u8,
-        pub manual_add_contacts: bool,
-        pub radio_freq: u32,
-        pub radio_bandwidth: u32,
-        pub radio_sf: u8,
-        pub radio_cr: u8,
-        pub device_name: &'a str,
-    }
-
-    impl<'a> CompanionSer for SelfInfo<'a> {
-        fn ser_size(&self) -> usize {
-            4 // packet ty + adv ty + tx power + max tx power
-            + 32 // pk
-            + 4 * 2 // lat,long
-            + 4 // multi acks + adv loc policy + telemetry mode + manual add contacts
-            + 4 * 2 // radio freq + band
-            + 2 // spreading factor coding rate
-            + self.device_name.len()
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_slice(&[
-                ResponseCodes::SelfInfo as u8,
-                self.advertisement_type,
-                self.tx_power,
-                self.max_tx_power,
-            ]);
-
-            out.write_slice(&self.public_key);
-            out.write_u32_le(self.lat);
-            out.write_u32_le(self.long);
-
-            out.write_slice(&[
-                self.multi_acks,
-                self.adv_loc_policy,
-                self.telemetry_mode,
-                self.manual_add_contacts as u8,
-            ]);
-
-            out.write_u32_le(self.radio_freq);
-            out.write_u32_le(self.radio_bandwidth);
-
-            out.write_slice(&[self.radio_sf, self.radio_cr]);
-
-            out.write_slice(self.device_name.as_bytes());
-
-            out.finish()
-        }
-    }
-
-    pub struct DeviceInfo<'a> {
-        pub fw_version: u8,
-        pub max_contacts: u8,
-        pub max_channels: u8,
-        pub ble_pin: u32,
-        pub firmware_build: NullPaddedSlice<'a, 12>,
-        pub model: NullPaddedSlice<'a, 40>,
-        pub version: NullPaddedSlice<'a, 20>,
-        pub client_repeat_enabled: bool,
-        pub path_hash_mode: u8,
-    }
-
-    impl<'a> CompanionSer for DeviceInfo<'a> {
-        fn ser_size(&self) -> usize {
-            4 // packet ty, firmware ver, max contacts, max channels
-            + 4 // ble pin
-            + 12 // firmware build
-            + 40 // model
-            + 20 // version
-            + 1 // client repeat enabled
-            + 1 // path hash mode
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_slice(&[
-                ResponseCodes::DeviceInfo as u8,
-                self.fw_version,
-                self.max_contacts,
-                self.max_channels,
-            ]);
-
-            out.write_u32_le(self.ble_pin);
-            self.firmware_build.encode_to(&mut out);
-            self.model.encode_to(&mut out);
-            self.version.encode_to(&mut out);
-
-            out.write_slice(&[self.client_repeat_enabled as u8, self.path_hash_mode]);
-
-            out.finish()
-        }
-    }
-
-    pub struct ChannelInfo {
-        pub idx: u8,
-        pub name: NullPaddedString<32>,
-        pub secret: [u8; 16],
-    }
-
-    impl CompanionSer for ChannelInfo {
-        fn ser_size(&self) -> usize {
-            2 // packet ty, channel idx
-            + 32 // channel name
-            + 16 // secret
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-            out.write_slice(&[ResponseCodes::ChannelInfo as u8, self.idx]);
-            self.name.encode_to(&mut out);
-            out.write_slice(&self.secret);
-
-            out.finish()
-        }
-    }
-
-    pub struct Battery {
-        pub battery_voltage: u16,
-        pub used_storage: u32,
-        pub total_storage: u32,
-    }
-
-    impl CompanionSer for Battery {
-        fn ser_size(&self) -> usize {
-            1 // packet ty
-            + 2 // battery voltage
-            + 4 // used storage
-            + 4 // total storage
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_u8(ResponseCodes::Battery as u8);
-            out.write_u16_le(self.battery_voltage);
-            out.write_u32_le(self.used_storage);
-            out.write_u32_le(self.total_storage);
-
-            out.finish()
-        }
-    }
-
-    impl CompanionSer for MsgSent {
-        fn ser_size(&self) -> usize {
-            1 // packet ty
-            + 1 // routing type
-            + 4 // expected ack
-            + 4 // suggested timeout
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_u8(ResponseCodes::MsgSent as u8);
-            out.write_u8(self.is_flood as u8);
-            out.write_slice(&self.expected_ack);
-            out.write_u32_le(self.suggested_timeout);
-
-            out.finish()
-        }
-    }
-
-    impl<'a> CompanionSer for ContactMsgRecv<'a> {
-        fn ser_size(&self) -> usize {
-            1 // packet ty
-            + 1 // snr
-            + 2 // reserved
-            + 6 // pk prefix
-            + 1 // path len
-            + 1 // text type
-            + 4 // timestamp
-            + if self.signature.is_some() { 4 } else { 0 }
-            + self.data.len()
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_u8(ResponseCodes::ContactMsgRecvV3 as u8);
-            out.write_i8(self.snr);
-            out.write_slice(&self.reserved);
-            out.write_slice(&self.pk_prefix);
-            out.write_u8(self.path_len);
-            out.write_u8(self.text_ty as u8);
-            out.write_u32_le(self.timestamp);
-
-            if let Some(signature) = self.signature {
-                out.write_slice(&signature);
-            }
-
-            out.write_slice(&self.data);
-
-            out.finish()
-        }
-    }
-
-    impl<'a> CompanionSer for SavedMessage<'a> {
-        fn ser_size(&self) -> usize {
-            match self {
-                SavedMessage::Contact(contact_msg_recv) => contact_msg_recv.ser_size(),
-                SavedMessage::Channel(channel_msg_recv) => channel_msg_recv.ser_size(),
-            }
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            match self {
-                SavedMessage::Contact(contact_msg_recv) => {
-                    contact_msg_recv.companion_serialize(out)
-                }
-                SavedMessage::Channel(channel_msg_recv) => {
-                    channel_msg_recv.companion_serialize(out)
-                }
-            }
-        }
-    }
-
-    impl<'a> CompanionSer for ChannelMsgRecv<'a> {
-        fn ser_size(&self) -> usize {
-            1 // packet ty
-            + 1 // snr
-            + 2 // reserved
-            + 1 // channel idx
-            + 1 // path len
-            + 1 // text ty
-            + 4 // timestamp
-            + self.data.len()
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_u8(ResponseCodes::ChannelMsgRecvV3 as u8);
-            out.write_i8(self.snr);
-            out.write_slice(&self.reserved);
-            out.write_slice(&[self.idx, self.path_len, self.text_ty as u8]);
-            out.write_u32_le(self.timestamp);
-            out.write_slice(&self.data);
-
-            out.finish()
-        }
-    }
-
-    pub struct ContactStart {
-        pub contacts: u32,
-    }
-
-    impl CompanionSer for ContactStart {
-        fn ser_size(&self) -> usize {
-            1 + 4 // packet_ty, len
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-            out.write_u8(ResponseCodes::ContactsStart as u8);
-            out.write_u32_le(self.contacts);
-            out.finish()
-        }
-    }
-
-    pub struct ContactEnd {
-        pub last_mod: u32,
-    }
-
-    impl CompanionSer for ContactEnd {
-        fn ser_size(&self) -> usize {
-            1 + 4 // packet_ty, last_mod
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_u8(ResponseCodes::EndOfContacts as u8);
-            out.write_u32_le(self.last_mod);
-
-            out.finish()
-        }
-    }
-
-    pub struct Ack {
-        pub code: [u8; 4],
-    }
-
-    impl CompanionSer for Ack {
-        fn ser_size(&self) -> usize {
-            1 + 4 // packet_ty, last_mod
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_u8(ResponseCodes::Ack as u8);
-            out.write_slice(&self.code);
-
-            out.finish()
-        }
-    }
-
-    pub struct RfLogData<'a> {
-        pub snr: i8,
-        pub rssi: i8,
-        pub data: &'a [u8],
-    }
-
-    impl<'a> RfLogData<'a> {
-        pub fn new(status: PacketStatus, data: &'a [u8]) -> RfLogData<'a> {
-            RfLogData {
-                snr: status.snr as i8,
-                rssi: status.rssi as i8,
-                data,
-            }
-        }
-    }
-
-    impl<'a> CompanionSer for RfLogData<'a> {
-        fn ser_size(&self) -> usize {
-            3 + self.data.len()
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-            out.write_u8(ResponseCodes::LogData as u8);
-            out.write_i8(self.snr);
-            out.write_i8(self.rssi);
-            out.write_slice(self.data);
-            out.finish()
-        }
-    }
-
-    pub struct CurrentTime {
-        pub time: u32,
-    }
-
-    impl CompanionSer for CurrentTime {
-        fn ser_size(&self) -> usize {
-            5
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-            out.write_u8(ResponseCodes::CurrTime as u8);
-            out.write_u32_le(self.time);
-            out.finish()
-        }
-    }
-
-    pub struct LoginSuccess {
-        pub permissions: Permissions,
-        pub prefix: [u8; 6],
-    }
-
-    impl CompanionSer for LoginSuccess {
-        fn ser_size(&self) -> usize {
-            8
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-            out.write_u8(ResponseCodes::LoginSuccess as u8);
-            out.write_u8(self.permissions.into_bytes()[0]);
-            out.write_slice(&self.prefix);
-            out.finish()
-        }
-    }
-
-    pub struct SignStart {
-        pub reserved: u8,
-        pub max_len: u32,
-    }
-
-    impl CompanionSer for SignStart {
-        fn ser_size(&self) -> usize {
-            6
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-            out.write_u8(ResponseCodes::SignStart as u8);
-            out.write_u8(self.reserved);
-            out.write_u32_le(self.max_len);
-            out.finish()
-        }
-    }
-
-    pub struct SignatureResponse {
-        pub signature: [u8; 64],
-    }
-
-    impl CompanionSer for SignatureResponse {
-        fn ser_size(&self) -> usize {
-            65
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-            out.write_u8(ResponseCodes::Signature as u8);
-            out.write_slice(&self.signature);
-            out.finish()
-        }
-    }
-
-    pub struct PrivateKeyResponse {
-        pub key: [u8; 64],
-    }
-
-    impl CompanionSer for PrivateKeyResponse {
-        fn ser_size(&self) -> usize {
-            65
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-            out.write_u8(ResponseCodes::ExportPrivateKey as u8);
-            out.write_slice(&self.key);
-            out.finish()
-        }
-    }
-
-    pub struct CustomVars(pub Vec<(SmolStr, SmolStr)>);
-
-    impl<'a> CompanionSer for CustomVars {
-        fn ser_size(&self) -> usize {
-            1 + self
-                .0
-                .iter()
-                .map(|(k, v)| k.len() + v.len() + 1 /* for the ':' */)
-                .sum::<usize>()
-                + (self.0.len().saturating_sub(1)/* for the ','s */)
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-            out.write_u8(ResponseCodes::CustomVars as u8);
-            let mut iter = self.0.iter().peekable();
-            while let Some((k, v)) = iter.next() {
-                out.write_slice(k.as_bytes());
-                out.write_u8(b':');
-                out.write_slice(v.as_bytes());
-                if iter.peek().is_some() {
-                    out.write_u8(b',');
-                }
-            }
-
-            out.finish()
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, Default)]
-    pub struct CoreStats {
-        pub battery_mv: u16,
-        pub uptime_secs: u32,
-        pub errors: u16,
-        pub queue_len: u8,
-    }
-
-    impl CompanionSer for CoreStats {
-        fn ser_size(&self) -> usize {
-            2 + 2 + 4 + 2 + 1
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_u8(0); // response code ??
-            out.write_u8(StatTypes::Core as u8);
-
-            out.write_u16_le(self.battery_mv);
-            out.write_u32_le(self.uptime_secs);
-            out.write_u16_le(self.errors);
-            out.write_u8(self.queue_len);
-
-            out.finish()
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, Default)]
-    pub struct RadioStats {
-        pub noise_floor: i16,
-        pub last_rssi: i8,
-        pub last_snr: i8,
-        pub tx_air_secs: u32,
-        pub rx_air_secs: u32,
-    }
-
-    impl CompanionSer for RadioStats {
-        fn ser_size(&self) -> usize {
-            2 + 2 + 1 + 1 + 4 + 4
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_u8(0); // response code ??
-            out.write_u8(StatTypes::Radio as u8);
-
-            out.write_i16_le(self.noise_floor);
-            out.write_i8(self.last_rssi);
-            out.write_i8(self.last_snr * 4);
-            out.write_u32_le(self.tx_air_secs);
-            out.write_u32_le(self.rx_air_secs);
-
-            out.finish()
-        }
-    }
-
-    #[derive(Clone, Copy, Debug, Default)]
-    pub struct PacketStats {
-        pub recv: u32,
-        pub sent: u32,
-        pub flood_tx: u32,
-        pub direct_tx: u32,
-        pub flood_rx: u32,
-        pub direct_rx: u32,
-        pub recv_errors: u32,
-    }
-
-    impl CompanionSer for PacketStats {
-        fn ser_size(&self) -> usize {
-            2 + 4 * 7
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_u8(0);
-            out.write_u8(StatTypes::Packets as u8);
-
-            out.write_u32_le(self.recv);
-            out.write_u32_le(self.sent);
-            out.write_u32_le(self.flood_tx);
-            out.write_u32_le(self.direct_tx);
-            out.write_u32_le(self.flood_rx);
-            out.write_u32_le(self.direct_rx);
-            out.write_u32_le(self.recv_errors);
-
-            out.finish()
-        }
-    }
-
-    pub struct TraceData<'a> {
-        pub reserved: u8,
-        pub flags: u8,
-        pub tag: [u8; 4],
-        pub auth_code: [u8; 4],
-        pub path: Path<'a>,
-        pub snrs: Cow<'a, [i8]>,
-        pub last_snr: i8,
-    }
-
-    impl<'a> CompanionSer for TraceData<'a> {
-        fn ser_size(&self) -> usize {
-            1 // code
-            + 1 // reserved
-            + 1 // path_len
-            + 1 // flags
-            + 4 // tag
-            + 4 // auth_code
-            + self.path.raw_bytes().len()
-            + self.snrs.len()
-            + 1 // last_snr
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_u8(ResponseCodes::TraceData as u8);
-            out.write_u8(self.reserved);
-            out.write_u8(self.path.len() as u8);
-            out.write_u8(self.flags | (self.path.mode as u8 & 0x03));
-            out.write_slice(&self.tag);
-            out.write_slice(&self.auth_code);
-            out.write_slice(self.path.raw_bytes());
-            out.write_slice(unsafe { core::mem::transmute::<&[i8], &[u8]>(&self.snrs) });
-            out.write_i8(self.last_snr);
-
-            out.finish()
-        }
-    }
-
-    pub struct ControlData<'a> {
-        pub snr: i8,
-        pub rssi: i8,
-        pub path_len: u8,
-        pub payload: Cow<'a, [u8]>,
-    }
-
-    impl<'a> CompanionSer for ControlData<'a> {
-        fn ser_size(&self) -> usize {
-            1 // type
-            + 1 // snr
-            + 1 // rssi
-            + 1 // path_len
-            + self.payload.len()
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_u8(ResponseCodes::ControlData as u8);
-            out.write_i8(self.snr);
-            out.write_i8(self.rssi);
-            out.write_u8(self.path_len);
-            out.write_slice(&self.payload);
-
-            out.finish()
-        }
-    }
-
-    pub struct BinaryResponse<'a> {
-        pub data: Cow<'a, [u8]>,
-    }
-
-    impl<'a> CompanionSer for BinaryResponse<'a> {
-        fn ser_size(&self) -> usize {
-            1 // type
-            + 1 // reserved
-            + self.data.len()
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-            out.write_u8(ResponseCodes::BinaryResponse as u8);
-            out.write_u8(0); // reserved
-            out.write_slice(&self.data);
-            out.finish()
-        }
-    }
-
-    impl CompanionSer for Contact {
-        fn ser_size(&self) -> usize {
-            1 // packet_ty
-        + 32 // pk
-        + 1 // adv_ty
-        + 1 // flags
-        + 1 // path_to_len 
-        + 64 // path_to
-        + 32 // name
-        + 4 // last_heard
-        + 4 // latitude
-        + 4 // longitude
-        + 4 // last_mod 
-        }
-
-        fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
-            let mut out = SliceWriter::new(out);
-
-            out.write_u8(ResponseCodes::Contact as u8);
-            out.write_slice(&self.key);
-            let flags = AppdataFlags::from_bits(self.flags).unwrap();
-            let adv_ty = if flags.contains(AppdataFlags::IS_CHAT_NODE) {
-                1
-            } else if flags.contains(AppdataFlags::IS_REPEATER) {
-                2
-            } else if flags.contains(AppdataFlags::IS_ROOM_SERVER) {
-                3
-            } else {
-                0
-            };
-
-            out.write_u8(adv_ty);
-            out.write_u8(flags.bits());
-            if let Some(path) = self.path_to.as_ref() {
-                out.write_u8(path.path_len_header().into_bytes()[0]);
-                NullPaddedSlice::<64>::from(path.raw_bytes()).encode_to(&mut out);
-            } else {
-                // flood
-                out.write_u8(0xFF);
-                NullPaddedSlice::<64>(&[]).encode_to(&mut out);
-            }
-
-            NullPaddedSlice::<32>::from(self.name.as_str()).encode_to(&mut out);
-            out.write_u32_le(self.last_heard);
-            out.write_u32_le(self.latitude);
-            out.write_u32_le(self.longitude);
-            out.write_u32_le(0);
-
-            out.finish()
-        }
-    }
-}
-
-pub struct NullPaddedString<const SIZE: usize>(pub SmolStr);
-
-impl<const SIZE: usize> NullPaddedString<SIZE> {
-    pub fn encode_to(&self, out: &mut SliceWriter<'_>) {
-        NullPaddedSlice::<SIZE>(self.0.as_bytes()).encode_to(out);
-    }
-}
-
-pub struct NullPaddedSlice<'a, const SIZE: usize>(pub &'a [u8]);
-
-impl<'a, const SIZE: usize> From<&'a [u8]> for NullPaddedSlice<'a, SIZE> {
-    fn from(value: &'a [u8]) -> Self {
-        debug_assert!(value.len() <= SIZE);
-        NullPaddedSlice(value)
-    }
-}
-
-impl<'a, const SIZE: usize> From<&'a str> for NullPaddedSlice<'a, SIZE> {
-    fn from(value: &'a str) -> Self {
-        debug_assert!(value.len() <= SIZE);
-        NullPaddedSlice(value.as_bytes())
-    }
-}
-
-impl<'a, const SIZE: usize> NullPaddedSlice<'a, SIZE> {
-    pub fn encode_to(&self, out: &mut SliceWriter<'_>) {
-        let to_pad = SIZE - self.0.len();
-        out.write_slice(self.0);
-        out.write_repeated(0, to_pad);
-    }
-}
-
-#[repr(u8)]
-pub enum ResponseCodes {
-    Ok = 0x00,
-    Err = 0x01,
-    ContactsStart = 0x02,
-    Contact = 0x03,
-    EndOfContacts = 0x04,
-    SelfInfo = 0x05,
-    MsgSent = 0x06,
-    ContactMsgRecv = 0x07,
-    ChannelMsgRecv = 0x08,
-    ContactMsgRecvV3 = 0x10,
-    ChannelMsgRecvV3 = 0x11,
-    CurrTime = 0x09,
-    NoMoreMessages = 0x0A,
-    Battery = 0x0C,
-    DeviceInfo = 0x0D,
-    ChannelInfo = 0x12,
-    Advertisement = 0x80,
-    Ack = 0x82, // ?
-    MessagesWaiting = 0x83,
-    LogData = 0x88,
-    LoginSuccess = 0x85,
-    SignStart = 0x13,
-    Signature = 0x14,
-    ExportPrivateKey = 0xe,
-    CustomVars = 0x15,
-    TraceData = 0x89,
-    ControlData = 0x8E,
-    BinaryResponse = 0x8C,
-}
-
-#[derive(FromRepr, Debug)]
-#[repr(u8)]
-pub enum HostCommandType {
-    AppStart = 1,
-    SendTxtMsg = 2,
-    SendChannelTxtMsg = 3,
-    GetContacts = 4,
-    GetDeviceTime = 5,
-    SetDeviceTime = 6,
-    SendSelfAdvert = 7,
-    SetAdvertName = 8,
-    AddUpdateContact = 9,
-    SyncNextMessage = 10,
-    SetRadioParams = 11,
-    SetTxPower = 12,
-    ResetPath = 13,
-    SetAdvertLatLon = 14,
-    RemoveContact = 15,
-    ShareContact = 16,
-    ExportContact = 17,
-    ImportContact = 18,
-    Reboot = 19,
-    GetBatteryVoltage = 20,
-    SetTuningParams = 21,
-    DeviceQuery = 22,
-    ExportPrivateKey = 23,
-    ImportPrivateKey = 24,
-    SendRawData = 25,
-    SendLogin = 26,
-    SendStatusReq = 27,
-    GetChannel = 31,
-    SetChannel = 32,
-    SignStart = 33,
-    SignData = 34,
-    SignFinish = 35,
-    SendTracePath = 36,
-    SetOtherParams = 38,
-    SendTelemtryReq = 39,
-    SendBinaryReq = 50,
-    SetFloodScope = 54,
-    GetCustomVars = 40,
-    SetCustomVar = 41,
-    SendControlData = 55,
-    GetStats = 56,
-    SendAnonReq = 57,
-}
-
-#[derive(FromRepr)]
-#[repr(u8)]
-pub enum StatTypes {
-    Core = 0,
-    Radio = 1,
-    Packets = 2,
-}
 
 pub trait CompanionSink {
     fn write_packet(&mut self, packet: &impl CompanionSer) -> impl Future<Output = ()>;
@@ -1005,230 +52,154 @@ pub async fn parse_packet(
     handler: &mut impl CompanionHandler,
     out: &mut impl CompanionSink,
 ) -> DecodeResult<()> {
-    use HostCommandType::*;
+    use HostCommand::*;
+    use meshcore_companion_protocol::commands;
     handler.start_req();
-    match HostCommandType::from_repr(packet.read_u8()?).ok_or(DecodeError::InvalidBitPattern)? {
-        AppStart => {
-            let app_ver = packet.read_u8()?;
-            let reserved = packet.read_chunk::<6>()?;
-            let name = core::str::from_utf8(packet)?;
-            out.write_packet(&handler.app_start(app_ver, *reserved, name).await)
-                .await;
-        }
-        SendTxtMsg => {
-            let txt_type = TextType::from_bytes(packet.read_u8()?)
-                .map_err(|_| DecodeError::InvalidBitPattern)?;
-            let attempt = packet.read_u8()?;
-            let timestamp = packet.read_u32_le()?;
-            let destination = packet.read_chunk::<6>()?;
-            let text = core::str::from_utf8(packet)?;
-            out.write_packet(
-                &handler
-                    .send_contact_message(txt_type, attempt, timestamp, destination, text)
-                    .await,
-            )
-            .await;
-        }
-        SendChannelTxtMsg => {
-            let txt_type = TextType::from_bytes(packet.read_u8()?)
-                .map_err(|_| DecodeError::InvalidBitPattern)?;
-            let idx = packet.read_u8()?;
-            let timestamp = packet.read_u32_le()?;
-            let text = core::str::from_utf8(packet)?;
-            out.write_packet(
-                &handler
-                    .send_channel_message(txt_type, idx, timestamp, text)
-                    .await,
-            )
-            .await;
-        }
-        GetContacts => {
-            let res = handler.get_contacts(None, out).await;
 
+    match HostCommand::companion_deserialize(packet)? {
+        AppStart(commands::AppStart {
+            app_ver,
+            reserved,
+            app_name,
+        }) => {
+            out.write_packet(&handler.app_start(app_ver, reserved, &app_name).await)
+                .await
+        }
+        SendTxtMsg(commands::SendTxtMsg {
+            txt_type,
+            attempt,
+            timestamp,
+            pubkey,
+            text,
+        }) => {
+            out.write_packet(
+                &handler
+                    .send_contact_message(text_type, attempt, timestamp, destination, &text)
+                    .await,
+            )
+            .await
+        }
+        SendChannelTxtMsg(commands::SendChannelTxtMsg {
+            txt_type,
+            channel_idx,
+            timestamp,
+            text,
+        }) => {
+            out.write_packet(
+                handler
+                    .send_channel_message(text_type, idx, timestamp, &txt)
+                    .await,
+            )
+            .await
+        }
+        GetContacts(commands::GetContacts { since }) => {
+            let res = handler.get_contacts(since, out).await;
             out.write_packet(&res).await;
         }
-        GetCustomVars => {
-            out.write_packet(&handler.get_custom_vars().await).await;
+        GetDeviceTime => out.write_packet(&handler.get_time().await).await,
+        SetDeviceTime(commands::SetDeviceTime { timestamp }) => {
+            out.write_packet(&handler.set_time(timestamp).await).await
         }
-        SetCustomVar => {
-            let Ok(packet) = core::str::from_utf8(packet) else {
-                out.write_packet(&responses::Err { code: None }).await;
-                return Ok(());
-            };
-
-            let Some((key, val)) = packet.split_once(':') else {
-                out.write_packet(&responses::Err { code: None }).await;
-                return Ok(());
-            };
-
-            out.write_packet(&handler.set_custom_var(key, val).await)
-                .await;
+        SendSelfAdvert(commands::SendSelfAdvert { flood }) => {
+            out.write_packet(&handler.send_self_advert(flood).await)
+                .await
         }
-        GetDeviceTime => {
-            out.write_packet(&handler.get_time().await).await;
+        SetAdvertName(commands::SetAdvertName { name }) => {
+            out.write_packet(&handler.set_advert_name(&name).await)
+                .await
         }
-        SetDeviceTime => {
-            let timestamp = packet.read_u32_le()?;
-            out.write_packet(&handler.set_time(timestamp).await).await;
-        }
-        SendSelfAdvert => {
-            let is_flood = !packet.is_empty() && packet.read_u8()? > 0;
-            // let is_flood = packet.read_u8()? > 0; // technically accepts invalid bit patterns (1.. interpreted as flood instead of just 1, but like. c'mon)
-            out.write_packet(&handler.send_self_advert(is_flood).await)
-                .await;
-        }
-        SetAdvertName => {
-            let s = core::str::from_utf8(packet)?;
-            out.write_packet(&handler.set_advert_name(s).await).await;
-        }
-        AddUpdateContact => {
-            let pk = packet.read_chunk::<32>()?;
-            let _ty = packet.read_u8()?;
-            let flags = packet.read_u8()?;
-            let out_path_len = packet.read_u8()?;
-            let path = packet.read_slice(out_path_len as usize)?;
-            let name = core::str::from_utf8(packet.read_slice(32)?)?.trim_end_matches('\x00');
-            let last_adv = packet.read_u32_le()?;
-            let lat = packet.read_u32_le()?;
-            let long = packet.read_u32_le()?;
-            let contact = Contact {
-                key: *pk,
-                name: String::from(name),
-                path_to: Some(Path::from_bytes(meshcore::PathHashMode::OneByte, path).to_owned()),
-                flags,
-                latitude: lat,
-                longitude: long,
-                last_heard: last_adv,
-            };
+        AddUpdateContact(commands::AddUpdateContact(contact)) => {
             out.write_packet(&handler.add_update_contact(contact).await)
-                .await;
+                .await
         }
-        SyncNextMessage => {
-            out.write_packet(&handler.sync_next_message().await).await; // todo: convert this to an iter like the contacts
+        SyncNextMessage => out.write_packet(&handler.sync_next_message().await).await,
+        SetRadioParams(commands::SetRadioParams { freq, bw, sf, cr }) => {
+            out.write_packet(&handler.set_radio_params(freq, bw, sf, cr).await)
+                .await
         }
-        SetRadioParams => {
-            let freq = packet.read_u32_le()?;
-            let bandwidth = packet.read_u32_le()?;
-            let spreading_factor = packet.read_u8()?;
-            let coding_rate = packet.read_u8()?;
-            out.write_packet(
-                &handler
-                    .set_radio_params(freq, bandwidth, spreading_factor, coding_rate)
-                    .await,
-            )
-            .await;
+        SetTxPower(commands::SetTxPower { tx_power }) => {
+            out.write_packet(&handler.set_tx_power(tx_power).await)
+                .await
         }
-        SetTxPower => {
-            let power = packet.read_u8()?;
-            out.write_packet(&handler.set_tx_power(power).await).await;
+        ResetPath(commands::ResetPath { pubkey }) => {
+            out.write_packet(&handler.reset_path(&pubkey).await).await
         }
-        ResetPath => {
-            let pk = packet.read_chunk::<32>()?;
-            out.write_packet(&handler.reset_path(pk).await).await;
+        SetAdvertLatLon(commands::SetAdvertLatLon { lat, lon }) => {
+            out.write_packet(&handler.set_lat_long(lat as u32, long as u32).await)
+                .await
+        } // this is probably wrong in conversion i need to figure out how it actually sends lat/long
+        RemoveContact(commands::RemoveContact { pubkey }) => {
+            out.write_packet(&handler.remove_contact(&pubkey).await)
+                .await
         }
-        SetAdvertLatLon => {
-            let lat = packet.read_u32_le()?;
-            let long = packet.read_u32_le()?;
-            out.write_packet(&handler.set_lat_long(lat, long).await)
-                .await;
-        }
-        RemoveContact => {
-            let pk = packet.read_chunk::<32>()?;
-            out.write_packet(&handler.remove_contact(pk).await).await;
-        }
-        ShareContact => todo!(),
-        ExportContact => todo!(),
-        ImportContact => {
-            out.write_packet(&handler.import_contact(packet).await)
-                .await;
-        }
+        ShareContact(commands::ShareContact { pubkey }) => todo!(),
+        ExportContact(export_contact) => todo!(),
+        ImportContact(import_contact) => todo!(),
         Reboot => todo!(),
-        GetBatteryVoltage => {
-            out.write_packet(&handler.get_battery().await).await;
-        }
+        GetBatteryVoltage => out.write_packet(&handler.get_battery().await).await,
         SetTuningParams => todo!(),
-        DeviceQuery => {
-            let app_ver = packet.read_u8()?;
-            out.write_packet(&handler.device_query(app_ver).await).await;
+        DeviceQuery(commands::DeviceQuery { app_target_ver }) => {
+            out.write_packet(&handler.device_query(app_target_ver).await)
+                .await
         }
-        ExportPrivateKey => {
-            out.write_packet(&handler.export_private_key().await).await;
+        ExportPrivateKey => out.write_packet(&handler.export_private_key().await).await,
+        ImportPrivateKey(import_private_key) => todo!(),
+        SendRawData(send_raw_data) => todo!(),
+        SendLogin(commands::SendLogin { pubkey, password }) => {
+            out.write_packet(&handler.send_login(&pubkey, password.as_bytes()).await)
+                .await
         }
-        ImportPrivateKey => todo!(),
-        SendRawData => {
-            out.write_packet(&responses::Ok { code: None }).await;
+        SendStatusReq(commands::SendStatusReq { pubkey }) => todo!(),
+        GetChannel(commands::GetChannel { idx }) => {
+            out.write_packet(&handler.channel_info(idx).await).await
         }
-        SendLogin => {
-            let pk = packet.read_chunk::<32>()?;
-            let password = packet;
-            out.write_packet(&handler.send_login(pk, password).await)
-                .await;
+        SetChannel(commands::SetChannel { idx, name, secret }) => {
+            out.write_packet(&handler.set_channel(idx, &name, &secret).await)
+                .await
         }
-        SendStatusReq => todo!(),
-        GetChannel => {
-            let idx = packet.read_u8()?;
-            out.write_packet(&handler.channel_info(idx).await).await;
+        SignStart => out.write_packet(&handler.sign_start().await).await,
+        SignData(commands::SignData(data)) => {
+            out.write_packet(&handler.sign_data(&data).await).await
         }
-        SetChannel => {
-            let idx = packet.read_u8()?;
-            let name = core::str::from_utf8(packet.read_chunk::<32>()?)?.trim_end_matches('\x00');
-            let secret = packet.read_chunk::<16>()?;
-            out.write_packet(&handler.set_channel(idx, name, secret).await)
-                .await;
+        SignFinish => out.write_packet(&handler.sign_finish().await).await,
+        SendTracePath(commands::SendTracePath {
+            tag,
+            auth,
+            flags,
+            path,
+        }) => {
+            out.write_packet(&handler.send_trace(tag, auth_code, flags, path).await)
+                .await
         }
-        SignStart => {
-            out.write_packet(&handler.sign_start().await).await;
+        SetOtherParams => todo!(),
+        SendTelemetryReq => todo!(),
+        SendBinaryReq(commands::SendBinaryReq {
+            pubkey,
+            req_code_params,
+        }) => {
+            out.write_packet(&handler.send_binary_req(&pubkey, &req_code_params).await)
+                .await
         }
-        SignData => {
-            out.write_packet(&handler.sign_data(packet).await).await;
+        SetFloodScope(set_flood_scope) => todo!(),
+        GetCustomVars => todo!(),
+        SetCustomVar(commands::SetCustomVar { key, value }) => {
+            out.write_packet(&handler.set_custom_var(&key, &val).await)
+                .await
         }
-        SignFinish => {
-            out.write_packet(&handler.sign_finish().await).await;
+        SendControlData(commands::SendControlData(data)) => {
+            out.write_packet(&handler.send_control_data(&data).await)
+                .await
         }
-        SetOtherParams => {
-            out.write_packet(&responses::Ok { code: None }).await;
-        }
-        SendTelemtryReq => todo!(),
-        SendBinaryReq => {
-            let pub_key = packet.read_chunk::<32>()?;
-            let data = packet;
-            out.write_packet(&handler.send_binary_req(pub_key, data).await)
-                .await;
-        }
-        SetFloodScope => {
-            out.write_packet(&responses::Ok { code: None }).await;
-        }
-        GetStats => {
-            let stat_type =
-                StatTypes::from_repr(packet.read_u8()?).ok_or(DecodeError::UnexpectedEof)?;
-            match stat_type {
-                StatTypes::Core => out.write_packet(&handler.get_core_stats().await).await,
-                StatTypes::Radio => out.write_packet(&handler.get_radio_stats().await).await,
-                StatTypes::Packets => out.write_packet(&handler.get_packet_stats().await).await,
+        GetStats(commands::GetStats { stats_type }) => match stats_type {
+            responses::StatTypes::Core => out.write_packet(&handler.get_core_stats().await).await,
+            responses::StatTypes::Radio => out.write_packet(&handler.get_radio_stats().await).await,
+            responses::StatTypes::Packets => {
+                out.write_packet(&handler.get_packet_stats().await).await
             }
-        }
-        SendControlData => {
-            out.write_packet(&handler.send_control_data(packet).await)
-                .await;
-        }
-        SendTracePath => {
-            // CMD(1) + tag(4) + auth_code(4) + flags(1) + [path]
-            let tag = packet.read_chunk::<4>()?;
-            let auth_code = packet.read_chunk::<4>()?;
-            let flags = packet.read_u8()?;
-            let path = Path::from_bytes(
-                PathHashMode::from_bytes(flags & 0x3)
-                    .map_err(|_| DecodeError::InvalidBitPattern)?,
-                packet,
-            );
-            out.write_packet(&handler.send_trace(*tag, *auth_code, flags, path).await)
-                .await;
-        }
-        SendAnonReq => {
-            let pubkey = packet.read_chunk::<32>()?;
-            let data = packet;
-            out.write_packet(&handler.send_anon_req(pubkey, data).await)
-                .await;
+        },
+        SendAnonReq(commands::SendAnonReq { pubkey, data }) => {
+            out.write_packet(&handler.send_anon_req(&pubkey, &data).await)
+                .await
         }
     }
 

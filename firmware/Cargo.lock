@@ -148,9 +148,9 @@ checksum = "1fd0f2584146f6f2ef48085050886acf353beff7305ebd1ae69500e27c67f64b"
 
 [[package]]
 name = "cc"
-version = "1.2.60"
+version = "1.2.61"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43c5703da9466b66a946814e1adf53ea2c90f10063b86290cc9eb67ce3478a20"
+checksum = "d16d90359e986641506914ba71350897565610e87ce0ad9e6f28569db3dd5c6d"
 dependencies = [
  "find-msvc-tools",
  "shlex",
@@ -215,6 +215,7 @@ dependencies = [
  "lora-phy",
  "maitake-sync",
  "memchr",
+ "meshcore-companion-protocol",
  "modular-bitfield",
  "ouroboros",
  "pastey",
@@ -244,6 +245,7 @@ dependencies = [
  "heapless 0.9.2",
  "litemap",
  "memchr",
+ "meshcore-companion-protocol",
  "modular-bitfield",
  "postcard",
  "rand",
@@ -948,9 +950,9 @@ dependencies = [
 
 [[package]]
 name = "esp-hal"
-version = "1.1.0-rc.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c3599174af043c640b89d5950558bc40bd448f6e1d56ae43880a0d8530b4f82c"
+checksum = "6af8fa8216bc126941bd43b5a200a50eab16e43881ccd0dd0b6792f4a82805f0"
 dependencies = [
  "bitfield",
  "bitflags 2.11.1",
@@ -1533,9 +1535,9 @@ checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
 
 [[package]]
 name = "libc"
-version = "0.2.185"
+version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "52ff2c0fe9bc6cb6b14a0592c2ff4fa9ceb83eea9db979b0487cd054946a2b8f"
+checksum = "68ab91017fe16c622486840e4c83c9a37afeff978bd239b5293d61ece587de66"
 
 [[package]]
 name = "linked_list_allocator"
@@ -1665,6 +1667,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "meshcore-companion-protocol"
+version = "0.1.0"
+source = "git+https://github.com/kore-signet/meshcore-companion-protocol#d053ea634c0a7237d55532b4cd62175bc915ad86"
+dependencies = [
+ "memchr",
+ "meshcore",
+ "modular-bitfield",
+ "strum 0.28.0",
+]
+
+[[package]]
 name = "modular-bitfield"
 version = "0.13.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1791,9 +1804,9 @@ checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
 
 [[package]]
 name = "pastey"
-version = "0.2.1"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b867cad97c0791bbd3aaa6472142568c6c9e8f71937e98379f584cfb0cf35bec"
+checksum = "c5a797f0e07bdf071d15742978fc3128ec6c22891c31a3a931513263904c982a"
 
 [[package]]
 name = "pin-project"

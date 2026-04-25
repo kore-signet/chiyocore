@@ -1,6 +1,12 @@
 [firmware]
 stack_size = 32768
 
+# [partitions]
+# app = "1.5M"
+# mesh_data = "1M"
+# logs = "1M"
+# bbs = "1M"
+
 [chiyocore]
 config = { "wifi.pw" = "nya", "wifi.ssid" = "nya" }
 default_channels = ["#test", "#emitestcorner"]
@@ -30,6 +36,6 @@ type = "chiyocore::ping_bot::PingBot"
 name = "cafe / chiyobot 🌃☕"
 channels = ["#test", "#emitestcorner"]
 
-# [stackup.chiyo0.layers.ttc_bot]
-# deps = { chiyocore-ttc = { git = "https://codeberg.org/emisignet/chiyocore-ttc.git" } }
-# type = "chiyocore_ttc::TTCBot"
+#[stackup.chiyo0.layers.ttc_bot]
+#deps = { chiyocore-ttc = { git = "https://codeberg.org/emisignet/chiyocore-ttc.git" } }
+#type = "chiyocore_ttc::TTCBot"

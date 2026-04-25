@@ -5,16 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::FirmwareResult;
 
-#[derive(Serialize, Deserialize)]
-pub struct Contact {
-    pub key: [u8; 32],
-    pub name: String,
-    pub path_to: Option<Path<'static>>,
-    pub flags: u8,
-    pub latitude: u32,
-    pub longitude: u32,
-    pub last_heard: u32,
-}
+pub use meshcore_companion_protocol::responses::Contact;
 
 /// Limited contact information for contacts, kept in a in-memory cache instead of on flash.
 #[derive(Clone)]
