@@ -62,6 +62,12 @@ impl From<sequential_storage::Error<esp_storage::FlashStorageError>> for Firmwar
     }
 }
 
+impl From<FirmwareError> for meshcore_companion_protocol::responses::Err {
+    fn from(val: FirmwareError) -> Self {
+        meshcore_companion_protocol::responses::Err { code: None }
+    }
+}
+
 pub type FirmwareResult<T> = Result<T, FirmwareError>;
 
 #[macro_export]

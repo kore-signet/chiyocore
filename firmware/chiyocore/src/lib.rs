@@ -102,6 +102,13 @@ impl From<esp_hal::aes::Error> for CompanionError {
     }
 }
 
+impl From<CompanionError> for meshcore_companion_protocol::responses::Err {
+    fn from(val: CompanionError) -> Self {
+        meshcore_companion_protocol::responses::Err { code: None }
+    }
+}
+
+
 pub type CompanionResult<T> = Result<T, CompanionError>;
 
 pub const GLOBAL_VARS_DIR: DirKey = DirKey::const_new(b"chiyoglobalvars");

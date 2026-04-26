@@ -13,16 +13,18 @@ use meshcore::{
         TextMessageData, TextType, TracePacket,
     },
 };
+use meshcore_companion_protocol::{
+    NullPaddedSlice, NullPaddedString,
+    responses::{
+        self, ChannelInfo, CompanionProtoResult, DeviceInfo, GetMessageRes, MsgSent, SelfInfo,
+    },
+};
 use smol_str::{SmolStr, ToSmolStr};
 
 use crate::{
-    companion_protocol::protocol::{
-        CompanionHandler, CompanionSink, NullPaddedSlice, NullPaddedString,
-        responses::{
-            self, ChannelInfo, CompanionProtoResult, DeviceInfo, GetMessageRes, MsgSent, SelfInfo,
-        },
-    },
+    companion_protocol::protocol::{CompanionHandler, CompanionSink},
     companionv2::Companion,
+    // companionv2::Companion,
 };
 use chiyocore::{
     GLOBAL_VARS_DIR,
@@ -76,7 +78,7 @@ impl CompanionHandler for Companion {
         })
     }
 
-    async fn channel_info(&mut self, idx: u8) -> CompanionProtoResult<responses::ChannelInfo> {
+    async fn channel_info(&mut self, idx: u8) -> CompanionProtoResult<responses::ChannelInfo<'_>> {
         let channels = self.storage.channels.read().await;
         let Some(channel) = channels.get(idx) else {
             return Err(responses::Err { code: None });
@@ -84,7 +86,7 @@ impl CompanionHandler for Companion {
 
         Ok(ChannelInfo {
             idx,
-            name: NullPaddedString(channel.name.clone()),
+            name: NullPaddedString(<Cow<'_, str>>::from(String::from(channel.name.as_str()))),
             secret: channel.key,
         })
     }
@@ -364,7 +366,7 @@ impl CompanionHandler for Companion {
                 let mut custom_vars = custom_vars.reader(&self.storage.fs);
                 while let Some(var) = custom_vars.next_file().await {
                     let var = var?;
-                    let var: (SmolStr, SmolStr) =
+                    let var: (String, String) =
                         postcard::from_bytes(var).map_err(FirmwareError::Postcard)?;
                     custom_var_map.push(var);
                 }

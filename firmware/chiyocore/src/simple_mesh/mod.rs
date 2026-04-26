@@ -47,11 +47,7 @@ mod layer;
 pub mod storage;
 pub use layer::*;
 
-pub struct MsgSent {
-    pub is_flood: bool,
-    pub expected_ack: [u8; 4],
-    pub suggested_timeout: u32,
-}
+pub use meshcore_companion_protocol::responses::MsgSent;
 
 /// A SimpleMesh instance is a full meshcore node (i.e, a set of ed25519 keys) which runs a set of layers on top of it.
 /// To avoid making everything into a mess of generics, these layers are stored separately, and run on top of the mesh node via some scaffolding in the [MeshcoreHandler] implementation.

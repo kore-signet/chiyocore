@@ -187,6 +187,7 @@ dependencies = [
  "esp-sync",
  "lora-phy",
  "meshcore",
+ "meshcore-companion-protocol",
  "postcard",
  "sequential-storage",
  "serde",
@@ -1669,11 +1670,12 @@ dependencies = [
 [[package]]
 name = "meshcore-companion-protocol"
 version = "0.1.0"
-source = "git+https://github.com/kore-signet/meshcore-companion-protocol#d053ea634c0a7237d55532b4cd62175bc915ad86"
+source = "git+https://github.com/kore-signet/meshcore-companion-protocol#04032ab48e99ded228d735175775b70e569da7df"
 dependencies = [
  "memchr",
  "meshcore",
  "modular-bitfield",
+ "serde",
  "strum 0.28.0",
 ]
 

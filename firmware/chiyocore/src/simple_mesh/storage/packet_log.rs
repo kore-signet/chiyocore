@@ -1,11 +1,11 @@
 use alloc::{borrow::Cow, collections::vec_deque::VecDeque};
 use arrayref::array_ref;
 use chiyo_hal::meshcore::{
-    Packet, PayloadType,
-    payloads::{TextMessageData, TextType},
+    DecodeError, Packet, PayloadType, payloads::{TextMessageData, TextType}
 };
 use chiyo_hal::{EspMutex, esp_hal};
 use esp_hal::sha::Sha1Context;
+use meshcore_companion_protocol::{CompanionSer, responses::{ChannelMsgRecv, ContactMsgRecv, ResponseCodes}};
 use serde::{Deserialize, Serialize};
 
 use crate::simple_mesh::storage::{channel::Channel, contact::CachedContact};
@@ -215,75 +215,55 @@ impl<'a> SavedMessage<'a> {
     }
 }
 
-/// A saved direct message.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ContactMsgRecv<'a> {
-    pub snr: i8,
-    pub reserved: [u8; 2],
-    pub pk_prefix: [u8; 6],
-    pub path_len: u8,
-    pub text_ty: TextType,
-    pub timestamp: u32,
-    pub signature: Option<[u8; 4]>,
-    pub data: Cow<'a, [u8]>,
-}
+impl<'a> CompanionSer for SavedMessage<'a> {
+    type Decoded<'data> = SavedMessage<'data>;
 
-impl<'a> ContactMsgRecv<'a> {
-    pub fn clone_with_data(&self) -> ContactMsgRecv<'static> {
-        let ContactMsgRecv {
-            snr,
-            reserved,
-            pk_prefix,
-            path_len,
-            text_ty,
-            timestamp,
-            signature,
-            data,
-        } = self;
-        ContactMsgRecv {
-            snr: *snr,
-            reserved: *reserved,
-            pk_prefix: *pk_prefix,
-            path_len: *path_len,
-            text_ty: *text_ty,
-            timestamp: *timestamp,
-            signature: *signature,
-            data: Cow::Owned(data.to_vec()),
+    fn ser_size(&self) -> usize {
+        match self {
+            SavedMessage::Contact(contact_msg_recv) => contact_msg_recv.ser_size(),
+            SavedMessage::Channel(channel_msg_recv) => channel_msg_recv.ser_size(),
         }
+    }
+
+    fn companion_serialize<'d>(&self, out: &'d mut [u8]) -> &'d [u8] {
+        match self {
+            SavedMessage::Contact(contact_msg_recv) => contact_msg_recv.companion_serialize(out),
+            SavedMessage::Channel(channel_msg_recv) => channel_msg_recv.companion_serialize(out),
+        }
+    }
+
+    fn companion_deserialize<'d>(input: &'d [u8]) -> Result<Self::Decoded<'d>, chiyo_hal::meshcore::DecodeError> {
+        Ok(match ResponseCodes::from_repr(*input.get(0).ok_or(DecodeError::UnexpectedEof)?) {
+            Some(ResponseCodes::ChannelMsgRecvV3) => SavedMessage::Channel(ChannelMsgRecv::companion_deserialize(input)?),
+            Some(ResponseCodes::ContactMsgRecvV3) => SavedMessage::Contact(ContactMsgRecv::companion_deserialize(input)?),
+            _ => return Err(DecodeError::InvalidBitPattern)
+        })
     }
 }
 
-/// A saved group message.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct ChannelMsgRecv<'a> {
-    pub snr: i8,
-    pub reserved: [u8; 2],
-    pub idx: u8,
-    pub path_len: u8,
-    pub text_ty: TextType,
-    pub timestamp: u32,
-    pub data: Cow<'a, [u8]>,
-}
+// /// A saved direct message.
+// #[derive(Serialize, Deserialize, Debug, Clone)]
+// pub struct ContactMsgRecv<'a> {
+//     pub snr: i8,
+//     pub reserved: [u8; 2],
+//     pub pk_prefix: [u8; 6],
+//     pub path_len: u8,
+//     pub text_ty: TextType,
+//     pub timestamp: u32,
+//     pub signature: Option<[u8; 4]>,
+//     pub data: Cow<'a, [u8]>,
+// }
 
-impl<'a> ChannelMsgRecv<'a> {
-    pub fn clone_with_data(&self) -> ChannelMsgRecv<'static> {
-        let ChannelMsgRecv {
-            snr,
-            reserved,
-            idx,
-            path_len,
-            text_ty,
-            timestamp,
-            data,
-        } = self;
-        ChannelMsgRecv {
-            snr: *snr,
-            reserved: *reserved,
-            idx: *idx,
-            path_len: *path_len,
-            text_ty: *text_ty,
-            timestamp: *timestamp,
-            data: Cow::Owned(data.to_vec()),
-        }
-    }
-}
+
+
+// /// A saved group message.
+// #[derive(Serialize, Deserialize, Debug, Clone)]
+// pub struct ChannelMsgRecv<'a> {
+//     pub snr: i8,
+//     pub reserved: [u8; 2],
+//     pub idx: u8,
+//     pub path_len: u8,
+//     pub text_ty: TextType,
+//     pub timestamp: u32,
+//     pub data: Cow<'a, [u8]>,
+// }

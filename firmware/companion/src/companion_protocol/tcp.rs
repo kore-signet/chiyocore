@@ -6,9 +6,10 @@ use embassy_net::tcp::{State, TcpSocket};
 use embassy_time::Duration;
 use embedded_io_async::Write;
 use meshcore::io::TinyReadExt;
+use meshcore_companion_protocol::CompanionSer;
 use smallvec::SmallVec;
 
-use crate::companion_protocol::protocol::{CompanionSer, CompanionSink};
+use crate::companion_protocol::protocol::CompanionSink;
 use crate::companionv2::Companion;
 // use crate::ping_bot::PingBot;
 use crate::companion_protocol;

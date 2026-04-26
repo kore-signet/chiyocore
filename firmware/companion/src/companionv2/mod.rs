@@ -9,10 +9,12 @@ use meshcore::{
     payloads::{Ack, Advert, ReturnedPath, TextMessageData},
     repeater_protocol::LoginResponse,
 };
+use meshcore_companion_protocol::responses;
 
 use crate::companion_protocol::protocol::{
-    ChannelCompanionSink, CompanionSink,
-    responses::{self},
+    ChannelCompanionSink,
+    CompanionSink,
+    // responses::{self},
 };
 use chiyocore::{
     CompanionResult,
@@ -77,7 +79,11 @@ impl SimpleMeshLayer for Companion {
         packet_status: PacketStatus,
     ) -> CompanionResult<()> {
         self.companion_sink
-            .write_packet(&responses::RfLogData::new(packet_status, packet_bytes))
+            .write_packet(&responses::RfLogData {
+                snr: packet_status.snr as i8,
+                rssi: packet_status.rssi as i8,
+                data: packet_bytes,
+            })
             .await;
         Ok(())
     }

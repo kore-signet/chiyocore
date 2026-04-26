@@ -1,17 +1,9 @@
-use alloc::string::String;
-use chiyocore::meshcore;
-use chiyocore::meshcore::{
-    DecodeError, DecodeResult, Path, PathHashMode,
-    io::{SliceWriter, TinyReadExt},
-    payloads::TextType,
-};
+use chiyocore::meshcore::{DecodeResult, Path, payloads::TextType};
 use chiyocore::simple_mesh::storage::contact::Contact;
-use meshcore_companion_protocol::commands::{HostCommand, HostCommandType};
+use meshcore_companion_protocol::commands::HostCommand;
+use meshcore_companion_protocol::responses::{CompanionProtoResult, CustomVars};
 use meshcore_companion_protocol::{CompanionSer, responses};
-use modular_bitfield::Specifier as _;
 use smallvec::SmallVec;
-use smol_str::SmolStr;
-use strum::FromRepr;
 
 pub trait CompanionSink {
     fn write_packet(&mut self, packet: &impl CompanionSer) -> impl Future<Output = ()>;
@@ -48,7 +40,7 @@ impl CompanionSink for ChannelCompanionSink {
 }
 
 pub async fn parse_packet(
-    mut packet: &[u8],
+    packet: &[u8],
     handler: &mut impl CompanionHandler,
     out: &mut impl CompanionSink,
 ) -> DecodeResult<()> {
@@ -74,7 +66,7 @@ pub async fn parse_packet(
         }) => {
             out.write_packet(
                 &handler
-                    .send_contact_message(text_type, attempt, timestamp, destination, &text)
+                    .send_contact_message(txt_type, attempt, timestamp, &pubkey, &text)
                     .await,
             )
             .await
@@ -86,8 +78,8 @@ pub async fn parse_packet(
             text,
         }) => {
             out.write_packet(
-                handler
-                    .send_channel_message(text_type, idx, timestamp, &txt)
+                &handler
+                    .send_channel_message(txt_type, channel_idx, timestamp, &text)
                     .await,
             )
             .await
@@ -125,16 +117,16 @@ pub async fn parse_packet(
             out.write_packet(&handler.reset_path(&pubkey).await).await
         }
         SetAdvertLatLon(commands::SetAdvertLatLon { lat, lon }) => {
-            out.write_packet(&handler.set_lat_long(lat as u32, long as u32).await)
+            out.write_packet(&handler.set_lat_long(lat as u32, lon as u32).await)
                 .await
         } // this is probably wrong in conversion i need to figure out how it actually sends lat/long
         RemoveContact(commands::RemoveContact { pubkey }) => {
             out.write_packet(&handler.remove_contact(&pubkey).await)
                 .await
         }
-        ShareContact(commands::ShareContact { pubkey }) => todo!(),
-        ExportContact(export_contact) => todo!(),
-        ImportContact(import_contact) => todo!(),
+        ShareContact(commands::ShareContact { pubkey: _ }) => todo!(),
+        ExportContact(_export_contact) => todo!(),
+        ImportContact(_import_contact) => todo!(),
         Reboot => todo!(),
         GetBatteryVoltage => out.write_packet(&handler.get_battery().await).await,
         SetTuningParams => todo!(),
@@ -143,13 +135,13 @@ pub async fn parse_packet(
                 .await
         }
         ExportPrivateKey => out.write_packet(&handler.export_private_key().await).await,
-        ImportPrivateKey(import_private_key) => todo!(),
-        SendRawData(send_raw_data) => todo!(),
+        ImportPrivateKey(_import_private_key) => todo!(),
+        SendRawData(_send_raw_data) => todo!(),
         SendLogin(commands::SendLogin { pubkey, password }) => {
             out.write_packet(&handler.send_login(&pubkey, password.as_bytes()).await)
                 .await
         }
-        SendStatusReq(commands::SendStatusReq { pubkey }) => todo!(),
+        SendStatusReq(commands::SendStatusReq { pubkey: _ }) => todo!(),
         GetChannel(commands::GetChannel { idx }) => {
             out.write_packet(&handler.channel_info(idx).await).await
         }
@@ -168,7 +160,7 @@ pub async fn parse_packet(
             flags,
             path,
         }) => {
-            out.write_packet(&handler.send_trace(tag, auth_code, flags, path).await)
+            out.write_packet(&handler.send_trace(tag, auth, flags, path).await)
                 .await
         }
         SetOtherParams => todo!(),
@@ -180,10 +172,10 @@ pub async fn parse_packet(
             out.write_packet(&handler.send_binary_req(&pubkey, &req_code_params).await)
                 .await
         }
-        SetFloodScope(set_flood_scope) => todo!(),
+        SetFloodScope(_set_flood_scope) => todo!(),
         GetCustomVars => todo!(),
         SetCustomVar(commands::SetCustomVar { key, value }) => {
-            out.write_packet(&handler.set_custom_var(&key, &val).await)
+            out.write_packet(&handler.set_custom_var(&key, &value).await)
                 .await
         }
         SendControlData(commands::SendControlData(data)) => {
@@ -224,7 +216,7 @@ pub trait CompanionHandler {
     fn channel_info(
         &mut self,
         idx: u8,
-    ) -> impl Future<Output = CompanionProtoResult<responses::ChannelInfo>>;
+    ) -> impl Future<Output = CompanionProtoResult<responses::ChannelInfo<'_>>>;
 
     fn set_channel(
         &mut self,
