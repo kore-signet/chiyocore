@@ -172,8 +172,10 @@ pub async fn parse_packet(
             out.write_packet(&handler.send_binary_req(&pubkey, &req_code_params).await)
                 .await
         }
-        SetFloodScope(_set_flood_scope) => todo!(),
-        GetCustomVars => todo!(),
+        SetFloodScope(_set_flood_scope) => {},
+        GetCustomVars => {
+            out.write_packet(&handler.get_custom_vars().await).await
+        }
         SetCustomVar(commands::SetCustomVar { key, value }) => {
             out.write_packet(&handler.set_custom_var(&key, &value).await)
                 .await
